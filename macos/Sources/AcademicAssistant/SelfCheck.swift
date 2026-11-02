@@ -689,6 +689,103 @@ func runSelfCheck() -> Never {
         created: Int(oct1.timeIntervalSince1970), timemodified: nil))
     check(plainPost.modified == nil && plainPost.posted == plainPost.date && plainPost.from == "Moodle",
           "b2: without `timemodified`, posted == created")
+    let editedPost = Announcement(title: "Room change", source: .moodle, from: "Dr. X", date: oct1,
+                                  body: "The quiz moved to tomorrow", modified: oct5)
+    let editedDate = editedPost.body.flatMap { Moodle.mentionedDates($0, posted: editedPost.posted, source: .announcement, via: .news).first?.date }
+    check(editedPost.posted == oct5
+          && editedDate.map { Calendar.current.dateComponents([.year, .month, .day], from: $0) } == DateComponents(year: 2026, month: 10, day: 6),
+          "b2: 'tomorrow' in a post edited on 5 Oct resolves to 6 Oct, not to 2 Oct from its creation date")
+
+    let calendarRef = CourseEvent(title: "Midterm Exam", date: keyDate, source: .calendar, ref: "41")
+    let outlookRef = CourseEvent(title: "Keynote", date: keyDate, source: .outlook, ref: "UID-9")
+    check(memberKeys([calendarRef], subject: "s") == ["c:41"] && memberKeys([outlookRef], subject: "s") == ["o:UID-9"],
+          "b2: a calendar event's key is c:<event id>, an Outlook event's is o:<UID>")
+    let refEvent = CourseEvent(title: "Keynote", date: Date.now.addingTimeInterval(86_400), source: .outlook, ref: "UID-9")
+    let refSubject = Subject(id: "refs", name: "Refs", code: "REF", hue: .green, assessments: [], assignments: [], materials: [],
+                             announcements: [], events: [refEvent])
+    let refBoard = deadlines([refSubject], from: Date.now, days: 7)
+    check(refBoard.count == 1 && refBoard[0].memberKey == "o:UID-9"
+          && refBoard[0].memberKey == memberKeys([refEvent], subject: "refs").first,
+          "b2: deadlines() puts the same memberKey on the item it produces")
+
+    // MARK: - Ranking & reason (B3)
+
+    var b3Cal = Calendar(identifier: .gregorian)
+    b3Cal.timeZone = TimeZone(identifier: "Asia/Dubai") ?? .current
+    func b3At(_ y: Int, _ mo: Int, _ d: Int, _ h: Int = 9, _ mi: Int = 0) -> Date {
+        b3Cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
+    }
+    let b3LA = Subject.all[0]
+    func b3Deadline(_ title: String, _ date: Date, _ w: Double, _ type: AssessmentType?, cutoff: Date? = nil) -> Deadline {
+        Deadline(id: title, subject: b3LA, title: title, date: date, weight: Int(w), kind: .deadline,
+                 type: type, givenWeight: Weighting(value: w, from: .moodle), cutoff: cutoff)
+    }
+    let b3Now = b3At(2026, 10, 28)
+    let b3Board = boardItems(Subject.all)
+    let b3Table: [(String, Double)] = [
+        ("linear-algebra|Assignment 2", 48.0), ("intro-to-ai|Midterm", 37.5), ("linear-algebra|Problem sheet 7", 20.0),
+        ("advanced-python|Assignment 2", 3.0), ("linear-algebra|Reading: Strang §6.1", 2.3),
+        ("advanced-python|Code review: PR #12", 1.6), ("advanced-python|Lab 3: asyncio drills", 1.5),
+        ("linear-algebra|Final", 0.93),
+    ]
+    let b3Actual = b3Table.compactMap { name, want in
+        b3Board.first { "\($0.subject.id)|\($0.title)" == name }.map { (name, want, $0.priority(now: Date.now)) }
+    }
+    let b3Off = b3Actual.filter { abs($0.2 - $0.1) > 0.1 }
+    check(b3Actual.count == b3Table.count && b3Off.isEmpty,
+          "ranking: every §1.5 sample row within 0.1; off: \(b3Off.map { "\($0.0) \(String(format: "%.2f", $0.2)) vs \($0.1)" }))")
+    check(doNext(b3Board, now: Date.now).map(\.title) == ["Assignment 2", "Midterm", "Problem sheet 7"],
+          "ranking: Do next picks Assignment 2, the AI Midterm and Problem sheet 7 (got \(doNext(b3Board, now: Date.now).map(\.title)))")
+
+    let wMoodle = Ranking.weighting(moodle: 12, syllabus: 7.5, spare: nil, title: "TED-Talk Script (8%)", type: .assignment)
+    let wSyllabus = Ranking.weighting(moodle: 0, syllabus: 7.5, spare: nil, title: "TED-Talk Script (8%)", type: .quiz)
+    let wTypical = Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: "Problem sheet 7", type: .assignment)
+    check(wMoodle.value == 12 && wMoodle.text == "12%" && wSyllabus.value == 7.5 && wSyllabus.text == "7.5%"
+          && wTypical.value == 5 && wTypical.estimate && wTypical.text == "~5% est.",
+          "ranking: Moodle 12 beats a title's (8%); the syllabus 7.5 beats it too; with neither it is a ~5% estimate")
+    let spareWeight = Ranking.weighting(moodle: nil, syllabus: nil, spare: 7.5, title: "Quiz 5", type: .quiz)
+    check(spareWeight.value == 7.5 && spareWeight.spare && spareWeight.text == "7.5% if it counts"
+          && syllabusPerItem("AI1110", "Quiz 5") == 7.5,
+          "ranking: a spare syllabus quiz counts 7.5% with 'if it counts'")
+
+    check(b3Deadline("Assignment 2", b3Now.addingTimeInterval(2 * 86_400), 12, .assignment).reason(now: b3Now, calendar: b3Cal)
+          == "12% · due in 2 days · ~6 h of work → start today",
+          "ranking: 12% due in 2 days reads '→ start today' (got \(b3Deadline("Assignment 2", b3Now.addingTimeInterval(2 * 86_400), 12, .assignment).reason(now: b3Now, calendar: b3Cal)))")
+    let b3TED = b3Deadline("TED-Talk Script (8%)", b3At(2026, 11, 1, 23, 59), 8, .assignment)
+    check(b3TED.reason(now: b3Now, calendar: b3Cal) == "8% · due in 4 days · ~4 h of work → start by Sat 31 Oct",
+          "ranking: 8% due 1 Nov reads '→ start by Sat 31 Oct' (got \(b3TED.reason(now: b3Now, calendar: b3Cal)))")
+    let b3Behind = b3Deadline("Project Report", b3Now.addingTimeInterval(3 * 86_400), 24, .assignment)
+    check(b3Behind.reason(now: b3Now, calendar: b3Cal) == "24% · due in 3 days · ~12 h of work, behind by ~1 day",
+          "ranking: slack −1 reads 'behind by ~1 day' (got \(b3Behind.reason(now: b3Now, calendar: b3Cal)))")
+    let b3Project = b3Deadline("Final Project Report", b3Now.addingTimeInterval(10 * 86_400), 30, .project)
+    let b3Small = b3Deadline("Problem sheet 8", b3Now.addingTimeInterval(86_400), 5, .assignment)
+    check(b3Project.priority(now: b3Now) > b3Small.priority(now: b3Now),
+          "ranking: a 30% project in 10 days outranks a ~5% item due tomorrow")
+    let b3Far = b3Deadline("Far away", b3Now.addingTimeInterval(29 * 86_400), 10, .project)
+    let b3Next = doNext([b3Project, b3Small, b3Far], now: b3Now, limit: 10).map(\.title)
+    check(b3Next.contains("Final Project Report") && !b3Next.contains("Far away"),
+          "ranking: Do next keeps a 30% project 10 days out and drops one 29 days out (got \(b3Next))")
+
+    let nov1 = Int(b3At(2026, 11, 1, 23, 59).timeIntervalSince1970)
+    let nov4 = Int(b3At(2026, 11, 4, 23, 59).timeIntervalSince1970)
+    let b3Assign = Moodle.Assign(id: 1, name: "Final Paper", duedate: nov1)
+    let extended = Moodle.effective(b3Assign, extension: nov4)
+    let noExtension = Moodle.effective(b3Assign, extension: 0)
+    let earlyExtension = Moodle.effective(b3Assign, extension: nov1 - 86_400)
+    check(extended.duedate == nov4 && extended.extended == true
+          && noExtension.duedate == nov1 && noExtension.extended == nil
+          && earlyExtension.duedate == nov1 && earlyExtension.extended == false,
+          "ranking: an extension moves the due date and flags 'extended'; 0 and an earlier date leave it alone")
+
+    let b3Nov2 = b3At(2026, 11, 2)
+    let late = b3Deadline("Late paper", b3At(2026, 11, 1, 23, 59), 10, .assignment, cutoff: b3At(2026, 11, 6, 23, 59))
+    let closed = b3Deadline("Closed paper", b3At(2026, 11, 1, 23, 59), 10, .assignment, cutoff: b3At(2026, 11, 1, 12))
+    let overdue = b3Deadline("Overdue paper", b3At(2026, 11, 1, 23, 59), 10, .assignment)
+    let b3Open = doNext([late, closed, overdue], now: b3Nov2, limit: 10).map(\.title)
+    check(late.reason(now: b3Nov2, calendar: b3Cal).contains("late until Fri 6 Nov")
+          && !b3Open.contains("Closed paper") && b3Open.contains("Overdue paper")
+          && overdue.reason(now: b3Nov2, calendar: b3Cal).contains("overdue"),
+          "ranking: past due but before the cutoff is 'late until …'; past the cutoff it leaves Do next; no cutoff stays overdue")
 
     // MARK: - Security (T1)
 

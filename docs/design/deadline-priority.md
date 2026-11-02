@@ -31,7 +31,13 @@ Today every view calls `deadlines()` on every redraw. Under this design they all
 | 4 | Type default (table below) | `~5%`, marked as an estimate | "Problem sheet 7" |
 
 - **Spare syllabus item** (`exactWeight == 0`, e.g. Calculus Quiz 5 while 4 slots are already filled): use the part's per-item weight (7.5) with the reason "7.5% if it counts". The student can't know in advance which quiz will be dropped.
-- **Type** comes from `Moodle.kind(nil, title)` for Moodle items. A text item (announcement, mail, PDF and so on) uses that type only when the title names one (quiz, midterm, final, mini-exam, project, lab). Otherwise it is **other**. A text item that Jev labels `exam` with no type word counts as a quiz.
+- **Type** comes from `Moodle.kind(nil, title)` for Moodle items.
+  - **"final" and "midterm" mean a sit-down exam only when the title has no hand-in word.** The hand-in words are paper, report, essay, presentation, submission, script, slides, project, portfolio, video and draft.
+  - The exception is a title that also says "exam".
+  - Otherwise `kind` skips the final/midterm match and carries on, so "Final Project" → project and "Critical Writing - Final Paper - 14%" → assignment.
+  - This is fixed inside `Moodle.kind`, so gradebook types, crunch and Do next agree.
+  - In the cached data it changes 3 of 57 items (2 final → assignment, 1 final → project) and keeps the 1 real final and all 6 midterms.
+  A text item (announcement, mail, PDF and so on) uses that type only when the title names one (quiz, midterm, final, mini-exam, project, lab). Otherwise it is **other**. A text item that Jev labels `exam` with no type word counts as a quiz.
 
 | Type | Default weight | Effort (hours) |
 |------|---------------:|----------------|
@@ -66,12 +72,12 @@ startBy    = due − effortDays
 `<weight> · <when> · <effort> → <start>`
 
 - `12% · due in 2 days · ~6 h of work → start today`
-- `~5% est. · due tomorrow · ~2.5 h → start today`
-- `8% · due in 4 days · ~4 h → start by Sat 31 Oct`
+- `~5% est. · due tomorrow · ~2.5 h of work → start today`
+- `8% · due in 4 days · ~4 h of work → start by Sat 31 Oct`
 - `25% · exam in 4 days · ~10 h prep → start today`
 - When behind (`slack < 0`): `24% · due in 3 days · ~12 h of work, behind by ~1 day`
 
-`~` always means estimate. `DeadlinePreview` names where the estimate came from ("no weight on Moodle; typical for an assignment"). The reason line is built by a pure `reason(now:)` in `Model.swift`, so it can be self-checked.
+Effort always reads "~N h of work", or "~N h prep" for exams (quiz, midterm, final, mini-exam). `~` always means estimate. `DeadlinePreview` names where the estimate came from ("no weight on Moodle; typical for an assignment"). The reason line is built by a pure `reason(now:)` in `Model.swift`, so it can be self-checked.
 
 ### 1.4 What Do next contains
 
@@ -134,9 +140,13 @@ Today mail, messages and news are all `.announcement`, and course-page text and 
   - `via: Origin?` (on `CourseEvent` and `Deadline`). Old cached events have no `via`, so all code reads the computed `resolvedVia`:
     - `via` when it's set;
     - otherwise `.calendar` → `moodleCalendar`, `.outlook` → `outlookCalendar`, `.announcement` → `news`, and `.document` → `coursePage` when `detail` starts with "On the course page", else `pdf`.
-    - `.announcement` → `news` is only approximately right: old mail and message events also map to it. That's harmless. All three share one rank, B5's marks don't exist yet, and every event gets its real `via` at the first sync after the upgrade.
+    - The builder refined `.announcement`: `mail` when `origin` starts with "✉︎", else `news`. Old Moodle messages still map to `news`. That's harmless. All three share one rank, B5's marks don't exist yet, and every event gets its real `via` at the first sync after the upgrade.
     - F1's `isPDFDate` becomes `resolvedVia == .pdf`.
-  - `posted: Date?` (the post or mail date)
+  - `posted: Date?` (the post or mail date; for an edited Moodle post, `max(created, modified)`)
+  - `posted` is used for ranking (newest post wins). **Relative dates ("on Tuesday", "tomorrow") stay resolved against the post's creation date**, not the edit:
+    - Moodle bumps `modified` for any edit, including a typo fix.
+    - Resolving against it would move every "Tuesday" in an edited post by up to a week.
+    - A real move ("moved to 4 Nov") is caught by the `moved` cue (§2.4) and usually carries an absolute date.
   - `moved: Bool?` (see 2.3)
   - `ref: String?` (stable source id: Moodle calendar event `id`, ICS `UID`, file url, material title)
 - `AssignmentItem` gets `moodleID: Int?` (from `Assign.id`). `CalendarEvent` decodes `id`.

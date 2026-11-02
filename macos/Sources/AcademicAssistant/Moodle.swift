@@ -406,8 +406,11 @@ extension Moodle {
         let n = name.lowercased()
         func has(_ pattern: String) -> Bool { n.range(of: pattern, options: .regularExpression) != nil }
         if has(#"\bquiz"#) { return .quiz } // "Quiz 1 Results" posted as an assignment is still a quiz
-        if has(#"mid-?term"#) { return .midterm }
-        if has(#"\bfinal\b"#) { return .final }
+        // "Final Paper" / "Midterm Report" is work to hand in, not an exam, unless it also says "exam".
+        let exam = !has(#"\b(papers?|reports?|essays?|presentations?|submissions?|scripts?|slides|projects?|portfolios?|videos?|drafts?)\b"#)
+            || has(#"\bexams?\b"#)
+        if exam && has(#"mid-?term"#) { return .midterm }
+        if exam && has(#"\bfinal\b"#) { return .final }
         if has(#"\bmini[- ]?exam"#) { return .miniExam }
         if has(#"\bproject"#) { return .project }
         if has(#"\blab"#) { return .lab }

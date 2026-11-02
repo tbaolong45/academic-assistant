@@ -1,10 +1,13 @@
 import SwiftUI
 
-// Pieces of the week board (WeekView). Amber and red are status colours, never course colours, and always sit next to
-// a text label ("HEAVY", "CRUNCH", "OVERDUE").
+// Pieces of the week board (WeekView). Warning and critical are status colours, never course colours, and always sit
+// next to a text label ("Heavy", "Crunch", "Overdue"). Nothing here animates forever (ui-redesign.md U4).
 
-private let amber = Color(hex: "f5b544")
-private let red = Color(hex: "ff6b6b")
+private var amber: Color { Palette.warning.color }
+private var red: Color { Palette.critical.color }
+
+/// "EXAM/QUIZ" → "Exam/quiz" (labels are upper case for older views).
+private func sentence(_ s: String) -> String { s.prefix(1).uppercased() + s.dropFirst().lowercased() }
 private let gb = Locale(identifier: "en_GB")
 
 private func hhmm(_ d: Date) -> String { d.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(gb)) }
@@ -41,7 +44,7 @@ struct DayColumn: View {
         VStack(alignment: .leading, spacing: 8) {
             DayHeader(day: day)
             if day.items.isEmpty {
-                Text("— free —").font(.caption).foregroundStyle(Tech.text3)
+                Text("Free").font(.caption).foregroundStyle(Palette.text3.color)
                     .frame(maxWidth: .infinity).padding(.vertical, 10)
             }
             ForEach(Array(day.items.enumerated()), id: \.element.id) { i, d in
@@ -51,10 +54,7 @@ struct DayColumn: View {
         }
         .padding(6)
         .background {
-            if day.isToday {
-                RoundedRectangle(cornerRadius: 12).fill(Tech.neon.opacity(0.04))
-                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Tech.neon.opacity(0.45), lineWidth: 1))
-            }
+            if day.isToday { RoundedRectangle(cornerRadius: 12).fill(Palette.accentSoft.color) } // today marker: a soft blue column
         }
         .opacity(day.isPast ? 0.55 : 1)
     }
@@ -67,29 +67,28 @@ private struct DayHeader: View {
         let count = day.items.count
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(weekday(day.date).uppercased()).fontWeight(.bold).foregroundStyle(Tech.text)
-                Text(day.date.formatted(.dateTime.day().locale(gb))).foregroundStyle(Tech.text2)
+                Text(weekday(day.date)).fontWeight(.semibold).foregroundStyle(Palette.text.color)
+                Text(day.date.formatted(.dateTime.day().locale(gb))).foregroundStyle(Palette.text2.color)
                 Spacer(minLength: 4)
-                Text("\(count) due").foregroundStyle(count == 0 ? Tech.text3 : Tech.text2)
+                Text("\(count) due").foregroundStyle(count == 0 ? Palette.text3.color : Palette.text2.color)
             }
             .font(.caption).monospacedDigit()
             WorkloadBar(fraction: min(Double(day.weight), 40) / 40, heavy: day.heavy, delay: Double(day.index) * 0.05)
             HStack(spacing: 4) {
-                if day.heavy { Tag(text: "HEAVY", edge: amber) }
+                if day.heavy { Tag(text: "Heavy", edge: amber) { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(amber) } }
                 Spacer(minLength: 2)
-                Text("\(day.weight)%").font(.caption2.weight(.semibold)).foregroundStyle(Tech.text2).monospacedDigit()
+                Text("\(day.weight)%").font(.caption2.weight(.semibold)).foregroundStyle(Palette.text2.color).monospacedDigit()
             }
             .frame(minHeight: 18)
         }
         .padding(10)
-        .techPanel(radius: 8)
-        .modifier(AmberGlow(active: day.heavy, radius: 8))
+        .card(radius: 8)
+        .modifier(WarningEdge(active: day.heavy, radius: 8))
         .overlay(alignment: .top) {
             if day.isToday {
-                Text("TODAY").font(.caption2.weight(.heavy)).tracking(1.2).foregroundStyle(Tech.bg)
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Tech.neon, in: Capsule())
-                    .shadow(color: Tech.neon.opacity(0.6), radius: 5)
+                Text("Today").font(.caption2.weight(.semibold)).foregroundStyle(Palette.onAccent.color)
+                    .padding(.horizontal, 7).padding(.vertical, 1)
+                    .background(Palette.accent.color, in: Capsule())
                     .offset(y: -8)
             }
         }
@@ -107,13 +106,11 @@ private struct WorkloadBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let color = heavy ? amber : Tech.neon
-        Capsule().fill(Tech.line).frame(height: 4)
+        let color = heavy ? amber : Palette.accent.color
+        Capsule().fill(Palette.line.color).frame(height: 4)
             .overlay(alignment: .leading) {
                 GeometryReader { g in
-                    Capsule().fill(color)
-                        .frame(width: g.size.width * (shown ? fraction : 0))
-                        .shadow(color: color.opacity(0.7), radius: 3)
+                    Capsule().fill(color).frame(width: g.size.width * (shown ? fraction : 0))
                 }
             }
             .animation(.easeOut(duration: 0.4), value: fraction)
@@ -134,29 +131,29 @@ private struct DeadlineCard: View {
     var body: some View {
         let d = deadline, p = d.subject.hue.palette
         let big = (d.weight ?? 0) >= 15
-        let weight = d.weight.map { Tag(text: "\($0)%", fill: big ? p.tint : nil, edge: big ? p.accent : nil) } // events carry no grade
+        let weight = d.weight.map { Tag(text: "\($0)%") } // neutral; events carry no grade
         let when = Group {
-            if d.date < now && d.source != nil { Tag(text: "PAST") } // a mentioned/calendar/document date that has passed: info, not a missed task
-            else if d.isClosed(now: now) { Tag(text: "CLOSED") } // past the cutoff: Moodle no longer takes it
-            else if d.date < now { Tag(text: "OVERDUE", edge: red) { Circle().fill(red).frame(width: 5, height: 5) } }
-            else { Text(dueText(d.date, now: now)).font(.caption2).foregroundStyle(Tech.text2).monospacedDigit() }
+            if d.date < now && d.source != nil { Tag(text: "Past") } // a mentioned/calendar/document date that has passed: info, not a missed task
+            else if d.isClosed(now: now) { Tag(text: "Closed") } // past the cutoff: Moodle no longer takes it
+            else if d.date < now { Tag(text: "Overdue", edge: red) { Image(systemName: "exclamationmark.circle.fill").foregroundStyle(red) } }
+            else { Text(dueText(d.date, now: now)).font(.caption2).foregroundStyle(Palette.text2.color).monospacedDigit() }
         }
         // From an announcement: open that post in its course. Otherwise (assignments, PDF dates): the preview.
         BoardButton(glow: p.accent, action: { if let a = d.announcement { nav.open(d.subject.id, announcement: a) } else { showing = true } }) {
             VStack(alignment: .leading, spacing: big ? 6 : 4) {
                 HStack(spacing: 6) {
-                    Text(d.subject.code).font(.caption2.weight(.semibold)).tracking(1).foregroundStyle(Tech.text3)
+                    Text(d.subject.code).font(.caption2.weight(.semibold)).foregroundStyle(Palette.text3.color)
                         .lineLimit(1).fixedSize()
                     if let src = d.source { // not a Moodle activity: say where the date came from
-                        Text(d.kind?.label ?? ([.calendar: "CALENDAR", .announcement: "MENTIONED", .outlook: "OUTLOOK"][src] ?? "DOCUMENT"))
-                            .font(.system(size: 9, weight: .semibold)).tracking(0.8).foregroundStyle(Tech.text2)
-                            .padding(.horizontal, 4).padding(.vertical, 1)
-                            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Tech.line))
-                            .fixedSize() // never wrap "MENTIONED"
+                        Text(sentence(d.kind?.label ?? ([.calendar: "Calendar", .announcement: "Mentioned", .outlook: "Outlook"][src] ?? "Document")))
+                            .font(.caption2).foregroundStyle(Palette.text2.color)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Palette.raised.color, in: Capsule())
+                            .fixedSize() // never wrap "Mentioned"
                     }
                 }
                 Text(d.label)
-                    .font(big ? .callout.weight(.bold) : .caption.weight(.medium)).foregroundStyle(Tech.text)
+                    .font(big ? .callout.weight(.bold) : .caption.weight(.medium)).foregroundStyle(Palette.text.color)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 4) { when; Spacer(minLength: 4); if let weight { weight } }
@@ -165,14 +162,8 @@ private struct DeadlineCard: View {
             }
             .padding(.vertical, big ? 12 : 8).padding(.leading, big ? 13 : 12).padding(.trailing, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                ZStack(alignment: .leading) {
-                    // Full-size base: without it the stack is only as wide as the stripe and gets centred in the card.
-                    big ? p.tint.opacity(0.6) : Color.clear
-                    p.accent.frame(width: big ? 4 : 3)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
+            .background(alignment: .leading) { p.accent.frame(width: 3) } // the course colour is an edge, never a fill
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .help(d.announcement == nil ? "Show details" : "Open the announcement")
         .popover(isPresented: $showing, arrowEdge: .trailing) { DeadlinePreview(deadline: d, now: now) { showing = false; open() } }
@@ -190,12 +181,13 @@ struct DoNextChip: View {
         BoardButton(glow: accent, action: { if let a = d.announcement { nav.open(d.subject.id, announcement: a) } else { showing = true } }) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Circle().fill(accent).frame(width: 8, height: 8).shadow(color: accent, radius: 3)
-                    Text(d.label).font(.caption.weight(.semibold)).foregroundStyle(Tech.text).lineLimit(1)
+                    Circle().fill(accent).frame(width: 8, height: 8)
+                    Text(d.label).font(.callout.weight(.semibold)).foregroundStyle(Palette.text.color).lineLimit(1)
                 }
-                Text(d.reason(now: now)).font(.caption2).foregroundStyle(Tech.text2).lineLimit(1).truncationMode(.middle)
+                Text(d.reason(now: now)).font(.caption).foregroundStyle(Palette.text2.color).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
+            .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .popover(isPresented: $showing, arrowEdge: .bottom) { DeadlinePreview(deadline: d, now: now) { showing = false; open() } }
@@ -219,43 +211,43 @@ struct DeadlinePreview: View {
         }
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Circle().fill(p.accent).frame(width: 8, height: 8).shadow(color: p.accent, radius: 3)
-                Text("\(d.subject.code) · \(d.subject.name)").font(.caption.weight(.semibold)).foregroundStyle(Tech.text2).lineLimit(1)
+                Circle().fill(p.accent).frame(width: 8, height: 8)
+                Text("\(d.subject.code) · \(d.subject.name)").font(.caption.weight(.semibold)).foregroundStyle(Palette.text2.color).lineLimit(1)
             }
-            Text(d.headline).font(.headline).foregroundStyle(Tech.text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            Text(d.headline).font(.headline).foregroundStyle(Palette.text.color).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             if let s = d.summary { // how the AI title was checked
-                Text(String(format: "AI TITLE · JEV CHECK: says when %.0f%% · keeps the point %.0f%% · nothing invented %.0f%% · specific %.0f%%",
+                Text(String(format: "AI title, checked by Jev: says when %.0f%% · keeps the point %.0f%% · nothing invented %.0f%% · specific %.0f%%",
                             s.mentionsDate * 100, s.keepsPoint * 100, s.faithful * 100, s.specific * 100))
-                    .font(.caption2.weight(.semibold)).tracking(0.6).foregroundStyle(Tech.text3)
+                    .font(.caption2).foregroundStyle(Palette.text3.color)
             }
             if d.headline != d.title { // the full sentence the date came from
-                Text(d.title).font(.caption).foregroundStyle(Tech.text2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Text(d.title).font(.caption).foregroundStyle(Palette.text2.color).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
             HStack(spacing: 6) {
                 Tag(text: d.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))
-                Tag(text: d.date < now ? "PAST" : "in " + timeLeft(d.date, now: now))
-                if let w = d.weight { Tag(text: "\(w)% OF GRADE", fill: p.tint, edge: p.accent) }
+                Tag(text: d.date < now ? "Past" : "in " + timeLeft(d.date, now: now))
+                if let w = d.weight { Tag(text: "\(w)% of grade") }
             }
             if d.toSubmit || d.kind == .exam { // why it ranks where it does, and where the weight came from
-                Text(d.reason(now: now)).font(.caption).foregroundStyle(Tech.text).fixedSize(horizontal: false, vertical: true)
-                Text(d.weightNote).font(.caption2).foregroundStyle(Tech.text3)
+                Text(d.reason(now: now)).font(.caption).foregroundStyle(Palette.text.color).fixedSize(horizontal: false, vertical: true)
+                Text(d.weightNote).font(.caption2).foregroundStyle(Palette.text3.color)
             }
-            Text(([d.kind?.label].compactMap { $0 } + [source.uppercased()]).joined(separator: " · "))
-                .font(.caption2.weight(.semibold)).tracking(1).foregroundStyle(Tech.text3)
+            Text(([d.kind.map { sentence($0.label) }].compactMap { $0 } + [source]).joined(separator: " · "))
+                .font(.caption2).foregroundStyle(Palette.text3.color)
             let news = related(d.title, in: d.subject.announcements)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if let detail = d.detail, !detail.isEmpty {
-                        Text(detail).font(.callout).foregroundStyle(Tech.text).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                        Text(detail).font(.callout).foregroundStyle(Palette.text.color).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                     } else if news.isEmpty && docs?.isEmpty != false {
-                        Text(docs == nil ? "Searching course files…" : "Moodle has no description for this item.").font(.callout).foregroundStyle(Tech.text3)
+                        Text(docs == nil ? "Searching course files…" : "Moodle has no description for this item.").font(.callout).foregroundStyle(Palette.text3.color)
                     }
                     if let docs, !docs.isEmpty {
                         SectionLabel(text: "in course documents")
                         ForEach(docs) { m in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(m.file).font(.caption2.weight(.semibold)).foregroundStyle(Tech.text3)
-                                Text(m.text).font(.callout).foregroundStyle(Tech.text).textSelection(.enabled)
+                                Text(m.file).font(.caption2.weight(.semibold)).foregroundStyle(Palette.text3.color)
+                                Text(m.text).font(.callout).foregroundStyle(Palette.text.color).textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -264,8 +256,8 @@ struct DeadlinePreview: View {
                         SectionLabel(text: "related announcements")
                         ForEach(news, id: \.self) { a in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(a.title).font(.callout.weight(.semibold)).foregroundStyle(Tech.text)
-                                Text("\(a.from) · \(a.date.formatted(.dateTime.day().month(.abbreviated)))").font(.caption2).foregroundStyle(Tech.text3)
+                                Text(a.title).font(.callout.weight(.semibold)).foregroundStyle(Palette.text.color)
+                                Text("\(a.from) · \(a.date.formatted(.dateTime.day().month(.abbreviated)))").font(.caption2).foregroundStyle(Palette.text3.color)
                                 if let body = a.body { ExpandableText(text: body) }
                             }
                         }
@@ -286,8 +278,7 @@ struct DeadlinePreview: View {
             let d = deadline
             docs = await Task.detached(priority: .userInitiated) { MaterialStore.mentions(of: d.title, in: d.subject) }.value
         }
-        .fontDesign(.monospaced)
-        .background(Tech.panel)
+        .background(Palette.surface.color)
     }
 }
 
@@ -300,15 +291,15 @@ struct CrunchBanner: View {
         let days = sameDay ? weekday(first) : "\(weekday(first))–\(weekday(last))"
         let n = crunch.items.count
         HStack(spacing: 10) {
-            Circle().fill(amber).frame(width: 8, height: 8).pulse(color: amber)
-            Text("\(Text("⚠ CRUNCH").fontWeight(.bold).tracking(1.2)) · \(days) · \(n) deadline\(n == 1 ? "" : "s") · \(crunch.weight)% of grade")
-                .font(.callout).foregroundStyle(Tech.text)
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(amber)
+            Text("\(Text("Crunch").fontWeight(.semibold)) · \(days) · \(n) deadline\(n == 1 ? "" : "s") · \(crunch.weight)% of grade")
+                .font(.callout).foregroundStyle(Palette.text.color)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-        .techPanel()
-        .modifier(AmberGlow(active: true, radius: 10))
+        .card()
+        .background(amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .modifier(WarningEdge(active: true, radius: 12))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Warning: crunch, \(sameDay ? weekday(first, .wide) : "\(weekday(first, .wide)) to \(weekday(last, .wide))"), "
             + "\(n) deadlines, \(crunch.weight)% of grade")
@@ -317,48 +308,32 @@ struct CrunchBanner: View {
 
 // MARK: - Shared bits
 
-/// Plain button on a tech panel that lifts and glows in `glow` while hovered.
+/// A card-styled plain button: lifts to `raised` with a blue edge while hovered. `glow` is the old name's leftover, unused.
 struct BoardButton<Label: View>: View {
     let glow: Color, action: () -> Void
     @ViewBuilder let label: () -> Label
     @Local private var hovered = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
             label()
                 .contentShape(RoundedRectangle(cornerRadius: 8))
-                .techPanel(active: hovered, glow: glow, radius: 8)
+                .card(active: hovered, radius: 8)
         }
         .buttonStyle(.plain)
-        .offset(y: hovered && !reduceMotion ? -2 : 0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
         .onHover { hovered = $0 }
     }
 }
 
-/// Amber edge with a soft breathing glow behind it (a steady glow under Reduce Motion).
-private struct AmberGlow: ViewModifier {
+/// A static warning edge (it used to breathe forever; ui-redesign.md U4).
+private struct WarningEdge: ViewModifier {
     let active: Bool, radius: CGFloat
-    @Local private var bright = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     func body(content: Content) -> some View {
-        content
-            .overlay { if active { RoundedRectangle(cornerRadius: radius).strokeBorder(amber.opacity(0.6)) } }
-            .background {
-                // The glow is its own layer so the repeating animation can't leak into the content.
-                if active {
-                    RoundedRectangle(cornerRadius: radius).fill(Tech.panel)
-                        .shadow(color: amber.opacity(reduceMotion ? 0.3 : bright ? 0.5 : 0.12), radius: 10)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 1.8).repeatForever(), value: bright)
-                }
-            }
-            .onAppear { bright = true }
+        content.overlay { if active { RoundedRectangle(cornerRadius: radius).strokeBorder(amber, lineWidth: 1.5) } }
     }
 }
 
-/// Small terminal-style tag; colour only tints the fill and edge, the text says what it means.
+/// Small neutral capsule tag (`raised` + `text2`); a status colour only tints the edge, the text says what it means.
 private struct Tag<Leading: View>: View {
     let text: String
     var fill: Color? = nil
@@ -368,12 +343,12 @@ private struct Tag<Leading: View>: View {
     var body: some View {
         HStack(spacing: 4) {
             leading()
-            Text(text).foregroundStyle(fill == nil ? Tech.text2 : Tech.text)
+            Text(text).foregroundStyle(fill == nil ? Palette.text2.color : Palette.text.color)
         }
-        .font(.caption2.weight(.semibold)).tracking(0.8).monospacedDigit()
-        .padding(.horizontal, 5).padding(.vertical, 2)
-        .background(fill ?? .clear, in: RoundedRectangle(cornerRadius: 4))
-        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(edge ?? Tech.line))
+        .font(.caption2.weight(.semibold)).monospacedDigit()
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(fill ?? Palette.raised.color, in: Capsule())
+        .overlay { if let edge { Capsule().strokeBorder(edge) } }
         .fixedSize()
     }
 }

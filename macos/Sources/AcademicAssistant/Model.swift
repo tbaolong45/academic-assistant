@@ -107,7 +107,7 @@ enum Origin: String, Codable, Sendable, CaseIterable {
 
 /// Stable identity of each event (deadline-priority.md §3.1), parallel to `events`. It never contains the date, so it
 /// survives a date change; `n` counts same-keyword dates in one source by date order, over all of a subject's events
-/// (never just the board window).
+/// (never just the board window) that have content, so a bare "Dec 8 — -" line can't shift it (those get "/-").
 func memberKeys(_ events: [CourseEvent], subject: String) -> [String] {
     let skip: Set = ["deadline", "submit", "submitted"]
     var count: [String: Int] = [:], out = Array(repeating: "", count: events.count)
@@ -117,6 +117,7 @@ func memberKeys(_ events: [CourseEvent], subject: String) -> [String] {
         if via == .outlookCalendar, let ref = e.ref { out[i] = "o:\(ref)"; continue }
         let words = keywords(mainPoint(e.title)).subtracting(skip).sorted().joined(separator: ",")
         let base = "t:\(subject)/\(via.rawValue)/\(e.ref ?? e.announcement ?? "-")/\(words)"
+        guard hasContent(e.title) else { out[i] = "\(base)/-"; continue } // never on the board
         out[i] = "\(base)/\(count[base, default: 0])"
         count[base, default: 0] += 1
     }

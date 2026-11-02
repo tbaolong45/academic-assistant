@@ -174,6 +174,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
             guard Self.isCurrent(generation: gen, current: generation), !Task.isCancelled else { return }
             publish()
             classifierNote = failure.map { "stopped after \(done): \($0)" } ?? "\(known.count) items classified"
+            classifying = false // before summarize(), which won't start while this is set (the defer runs too late)
             summarize() // board items are known now
         }
     }
@@ -232,7 +233,9 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     /// School mail forwarded to Gmail: new messages from the last 60 days are downloaded once (by UID) and notified.
     /// nil when no Gmail login is set or the session failed (the last mail stays).
     private func fetchMail() async -> MailStore? {
-        if let running = mailFetch { return await running.value } // e.g. a set-mail check during a sync's fetch: one session only
+        // A set-mail check during a sync's fetch waits for it: one session only. A waiter's own cancellation doesn't reach
+        // the shared fetch (a plain `.value`); only the owner below, or disconnect, cancels it.
+        if let running = mailFetch { return await running.value }
         let task = Task { await fetchMailNow() }
         mailFetch = task
         defer { mailFetch = nil }
@@ -373,6 +376,9 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         syncTask = nil
         classifyTask?.cancel()
         summarizeTask?.cancel()
+        mailFetch?.cancel()
+        summaryNote = nil
+        classifierNote = nil
         syncing = false // a cancelled sync can't leave "Syncing…" up or Sync now disabled
         downloading = false
         mailNote = nil

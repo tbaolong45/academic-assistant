@@ -29,7 +29,7 @@ struct WeekView: View {
                     if let c = crunch(items.filter { $0.date >= now && ($0.toSubmit || $0.kind == .exam) }) { CrunchBanner(crunch: c) }
                     if !next.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            SectionLabel("do next")
+                            SectionLabel("Do next")
                             let chips = ForEach(Array(next.enumerated()), id: \.element.id) { i, d in
                                 DoNextChip(deadline: d, now: now) { open(d.subject.id) }.stagger(i)
                             }
@@ -37,7 +37,7 @@ struct WeekView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        SectionLabel("week")
+                        SectionLabel("Week")
                         // Insertion slides in from the side of travel; removal just fades, so its direction can't be stale.
                         board(days, width: width, now: now)
                             .id(offset)
@@ -64,11 +64,11 @@ struct WeekView: View {
 
     private func header(start: Date, items: [Deadline], everything: [Deadline]) -> some View {
         let end = cal.date(byAdding: .day, value: 6, to: start)!
-        let range = Text("\(start.short().uppercased()) – \(end.short().uppercased())")
-            .font(.callout.weight(.semibold)).foregroundStyle(Tech.text2).monospacedDigit()
+        let range = Text("\(start.short()) – \(end.short())")
+            .font(.title3).foregroundStyle(Palette.text2.color).monospacedDigit()
         let weight = items.reduce(0) { $0 + ($1.weight ?? 0) }
         return VStack(alignment: .leading, spacing: 10) {
-            TypewriterTitle(text: "> deadlines")
+            Text("Deadlines").font(.largeTitle.bold()).foregroundStyle(Palette.text.color).accessibilityAddTraits(.isHeader)
             ViewThatFits(in: .horizontal) {
                 HStack { range; Spacer(minLength: 16); weekButtons }
                 VStack(alignment: .leading, spacing: 8) { range; weekButtons }
@@ -79,29 +79,25 @@ struct WeekView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 Text("\(items.count) item\(items.count == 1 ? "" : "s") · \(weight)% of grades due")
-                    .font(.caption).foregroundStyle(Tech.text)
+                    .font(.callout).foregroundStyle(Palette.text2.color)
             }
         }
     }
 
     private var weekButtons: some View {
         HStack(spacing: 8) {
-            BoardButton(glow: Tech.neon) { go(toWeek: offset - 1) } label: { buttonLabel(Image(systemName: "chevron.left")) }
+            Button { go(toWeek: offset - 1) } label: { Image(systemName: "chevron.left") }
                 .keyboardShortcut(.leftArrow, modifiers: .option)
                 .help("Previous week (⌥←)").accessibilityLabel("Previous week")
-            BoardButton(glow: Tech.neon) { go(toWeek: 0) } label: { buttonLabel(Text("This week")) }
+            Button("This week") { go(toWeek: 0) }
                 .keyboardShortcut("t", modifiers: [])
-                .opacity(offset == 0 ? 0.5 : 1)
+                .disabled(offset == 0)
                 .help("Back to this week (T)")
-            BoardButton(glow: Tech.neon) { go(toWeek: offset + 1) } label: { buttonLabel(Image(systemName: "chevron.right")) }
+            Button { go(toWeek: offset + 1) } label: { Image(systemName: "chevron.right") }
                 .keyboardShortcut(.rightArrow, modifiers: .option)
                 .help("Next week (⌥→)").accessibilityLabel("Next week")
         }
-    }
-
-    private func buttonLabel(_ content: some View) -> some View {
-        content.font(.caption.weight(.semibold)).foregroundStyle(Tech.text)
-            .padding(.horizontal, 10).padding(.vertical, 6)
+        .buttonStyle(.bordered) // secondary buttons (ui-redesign.md §2 A)
     }
 
     // MARK: Board
