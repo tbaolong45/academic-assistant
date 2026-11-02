@@ -1324,7 +1324,7 @@ func runSelfCheck() -> Never {
     let mergedFast = Moodle.merge(fast: MoodleSync(siteName: "X", subjects: [fastSubject], warnings: [], synced: b3Now), previous: [prevSubject]).subjects
     check(mergedFast.count == 1 && mergedFast[0].assessments.map(\.id) == ["p1"]
           && mergedFast[0].materials.map(\.title) == ["Slides"]
-          && mergedFast[0].assignments.map(\.title) == ["New task"]
+          && mergedFast[0].assignments.map(\.title) == ["Old", "New task"]
           && mergedFast[0].announcements.map(\.title) == ["New news", "Old news"]
           && (mergedFast[0].events ?? []).map(\.title) == ["Quiz 2 on 5 Nov", "Exam"],
           "sync: a fast sync keeps the previous grades, materials and course-page dates, and takes the new assignments and news")
@@ -1404,6 +1404,42 @@ func runSelfCheck() -> Never {
         check(!unstampedSaved && stampedSaved && MaterialStore.isStamped(stampURL),
               "b7: with no Moodle timestamp an unstamped file is re-downloaded once, then kept (got \(unstampedSaved)/\(stampedSaved))")
     } catch { check(false, "b7: stamp fixtures run (\(error))") }
+
+    // MARK: - F1k review fixes
+
+    func f1kSubject(_ id: String, assignments: [AssignmentItem] = [], announcements: [Announcement] = [],
+                    events: [CourseEvent] = []) -> Subject {
+        Subject(id: id, name: id, code: id, hue: .green, assessments: [], assignments: assignments, materials: [],
+                announcements: announcements, events: events)
+    }
+    let prevThree = f1kSubject("as", assignments: [1, 2, 3].map { n in
+        AssignmentItem(title: "A\(n)", due: b3Now.addingTimeInterval(Double(n) * 86_400), status: .open, moodleID: n)
+    })
+    let fastNone = f1kSubject("as")
+    let keptAll = Moodle.merge(fast: MoodleSync(siteName: "X", subjects: [fastNone], warnings: [], synced: b3Now), previous: [prevThree]).subjects[0]
+    check(keptAll.assignments.map(\.title) == ["A1", "A2", "A3"],
+          "sync: a fast sync that returned no assignments keeps all 3 from before (got \(keptAll.assignments.map(\.title)))")
+    let fastUpdated = f1kSubject("as", assignments: [
+        AssignmentItem(title: "A1", due: b3Now.addingTimeInterval(10 * 86_400), status: .open, moodleID: 1),
+        AssignmentItem(title: "A2", due: b3Now.addingTimeInterval(2 * 86_400), status: .open, moodleID: 2)])
+    let keptPartial = Moodle.merge(fast: MoodleSync(siteName: "X", subjects: [fastUpdated], warnings: [], synced: b3Now), previous: [prevThree]).subjects[0]
+    check(keptPartial.assignments.map(\.title) == ["A2", "A3", "A1"]
+          && keptPartial.assignments.first { $0.title == "A1" }?.due == b3Now.addingTimeInterval(10 * 86_400),
+          "sync: a partial fast result keeps the missing assignment and the updated one wins (got \(keptPartial.assignments.map(\.title)))")
+    let prevMessage = Announcement(title: "Room change", source: .message, from: "T", date: b3Now)
+    let prevTeacherEvent = CourseEvent(title: "Guest lecture", date: b3Now.addingTimeInterval(3 * 86_400), source: .calendar, ref: "ev-1")
+    let prevRich = f1kSubject("rich", announcements: [prevMessage], events: [prevTeacherEvent])
+    let fastPlain = f1kSubject("rich")
+    let keptRich = Moodle.merge(fast: MoodleSync(siteName: "X", subjects: [fastPlain], warnings: [], synced: b3Now), previous: [prevRich]).subjects[0]
+    check(keptRich.announcements.map(\.title) == ["Room change"] && (keptRich.events ?? []).map(\.title) == ["Guest lecture"],
+          "sync: a message and a teacher event missing from the fast result are kept")
+    let generalMessages = f1kSubject("general", announcements: [prevMessage])
+    let keptGeneral = Moodle.merge(fast: MoodleSync(siteName: "X", subjects: [], warnings: [], synced: b3Now), previous: [generalMessages]).subjects
+    check(keptGeneral.count == 1 && keptGeneral[0].id == "general" && keptGeneral[0].announcements.map(\.title) == ["Room change"],
+          "sync: a General made only of messages survives a fast sync that doesn't see it")
+    check(needsStatus(dueDate: b3Now.addingTimeInterval(-20 * 86_400), cutoff: b3Now.addingTimeInterval(3 * 86_400),
+                      graded: false, now: b3Now),
+          "sync: an extension (effective cutoff in the future) keeps the status call on a 20-day-old assignment")
 
     // MARK: - Security (T1)
 

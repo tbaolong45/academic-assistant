@@ -103,25 +103,32 @@ struct Moodle: Sendable {
     }
 
     /// A fast sync on top of the last slow one (P6): grades (assessments) and materials stay as they were; assignments,
-    /// announcements, messages and events come from the fast sync. Kept from before: course-page dates (contents are
-    /// slow) and forum posts the fast sync didn't fetch (every forum but news). ponytail: a deleted post lingers until the
-    /// next slow sync (≤ 60 min), since a post doesn't record which forum it came from.
+    /// announcements, messages and events come from the fast sync, and whatever it didn't return is kept from before
+    /// (F1k): a failed or capped call, a forum the fast tier skips, course-page dates (contents are slow). Dates from a post
+    /// are kept only when the post itself is missing, so an edited post's new dates replace its old ones.
+    /// ponytail: something deleted on Moodle lingers until the next slow sync (≤ 60 min).
     static func merge(fast: MoodleSync, previous: [Subject]) -> MoodleSync {
+        let new = Set(fast.subjects.map(\.id))
+        var subjects = fast.subjects
+        for p in previous where !new.contains(p.id) { subjects.append(p) } // e.g. a General of only messages or events
         let old = Dictionary(previous.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        var subjects = fast.subjects.map { s -> Subject in
-            guard let p = old[s.id] else { return s }
-            let have = Set(s.announcements.map(\.key))
-            return Subject(id: s.id, name: s.name, code: s.code, hue: s.hue, assessments: p.assessments, assignments: s.assignments,
+        subjects = subjects.map { s -> Subject in
+            guard new.contains(s.id), let p = old[s.id] else { return s }
+            let ids = Set(s.assignments.compactMap(\.moodleID)), titles = Set(s.assignments.map(\.title))
+            let posts = Set(s.announcements.map(\.key))
+            func eventKey(_ e: CourseEvent) -> String { e.ref ?? "\(e.date.timeIntervalSince1970)|\(e.title)" }
+            let events = Set((s.events ?? []).map(eventKey))
+            let keptEvents = (p.events ?? []).filter { e in
+                if e.resolvedVia == .coursePage { return true }
+                if let a = e.announcement { return !posts.contains(a) } // re-read when its post is back
+                return !events.contains(eventKey(e))
+            }
+            return Subject(id: s.id, name: s.name, code: s.code, hue: s.hue, assessments: p.assessments,
+                           assignments: (s.assignments + p.assignments.filter { a in a.moodleID.map { !ids.contains($0) } ?? !titles.contains(a.title) })
+                               .sorted { $0.due < $1.due },
                            materials: p.materials,
-                           announcements: (s.announcements + p.announcements.filter { $0.source == .moodle && !have.contains($0.key) })
-                               .sorted { $0.date > $1.date },
-                           events: ((s.events ?? []) + (p.events ?? []).filter { $0.resolvedVia == .coursePage }).sorted { $0.date < $1.date })
-        }
-        // General can consist of shared course-page dates alone, which the fast sync doesn't see.
-        if !subjects.contains(where: { $0.id == "general" }), let g = old["general"],
-           case let pages = (g.events ?? []).filter({ $0.resolvedVia == .coursePage }), !pages.isEmpty {
-            subjects.append(Subject(id: g.id, name: g.name, code: g.code, hue: g.hue, assessments: [], assignments: [], materials: [],
-                                    announcements: [], events: pages))
+                           announcements: (s.announcements + p.announcements.filter { !posts.contains($0.key) }).sorted { $0.date > $1.date },
+                           events: ((s.events ?? []) + keptEvents).sorted { $0.date < $1.date })
         }
         return MoodleSync(siteName: fast.siteName, subjects: subjects, warnings: fast.warnings, synced: fast.synced)
     }
@@ -216,7 +223,9 @@ struct Moodle: Sendable {
         var submitted: [Int: Bool] = [:], extensions: [Int: Int] = [:], statusError: String?
         let live = (assigns?.courses ?? []).flatMap(\.assignments).filter { a in
             let due = before[a.id].flatMap { $0.extended == true ? $0.due : nil } ?? Self.date(a.duedate ?? 0) ?? .distantFuture
-            return needsStatus(dueDate: due, cutoff: Self.date(a.cutoffdate ?? 0), graded: graded.contains(a.id), now: now)
+            // The previous effective cutoff carries an extension the raw cutoff doesn't show (F1k #4).
+            let cutoff = [Self.date(a.cutoffdate ?? 0), before[a.id]?.cutoff].compactMap { $0 }.max()
+            return needsStatus(dueDate: due, cutoff: cutoff, graded: graded.contains(a.id), now: now)
         }
         for (id, p) in before where !live.contains(where: { $0.id == id }) {
             submitted[id] = p.status == .submitted

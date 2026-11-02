@@ -25,7 +25,8 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     @Published private(set) var source: Source = .sample
     @Published var syncError: String?
     private var lastSyncPartial = false // a sync with warnings may have missed items: don't diff against it
-    private var lastSlow: Date? // the last slow-tier sync this run (P6); nil = the next sync is slow
+    private var lastSlow: Date? // when the last slow-tier sync of this run started (P6); nil = the next sync is slow
+    private var lastSlowFinished: Date? // and when it finished: the window-forward throttle counts from here (F1k #3)
     private var activation: AnyCancellable?
     @Published private(set) var warnings: [String] = [] // non-fatal sync notes (a course part skipped, >5 courses)
     @Published private(set) var syncing = false
@@ -142,7 +143,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     /// The app came forward: a slow sync, unless one finished in the last 5 minutes. ponytail: that throttle is ours,
     /// not the spec's, so switching apps doesn't cost ~90 Moodle calls each time; drop it if a fresher grade is wanted.
     private func cameForward() {
-        guard isConnected, !syncing, Date.now.timeIntervalSince(lastSlow ?? .distantPast) > 5 * 60 else { return }
+        guard isConnected, !syncing, Date.now.timeIntervalSince(lastSlowFinished ?? .distantPast) > 5 * 60 else { return }
         syncTask = Task { await sync(cameForward: true) }
     }
 
@@ -186,6 +187,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
             let scanned = await scanDocuments(gen)
             // Only a complete board says an item is gone: every configured source must have come through (Moodle with no
             // warnings, Outlook, mail, the file downloads and this generation's PDF scan); otherwise its marks are still live.
+            if scanned { lastSlowFinished = .now } // after the downloads and the PDF scan
             let complete = result.warnings.isEmpty && (!hasOutlookLink || items != nil) && (!hasMail || fetched != nil) && downloaded && scanned
             if complete, Self.isCurrent(generation: gen, current: generation) { pruneBoardMarks() }
         case .failure(let error):
