@@ -478,6 +478,29 @@ func deadlines(_ subjects: [Subject], from start: Date = .now, days: Int = 7) ->
 /// The board's items: deadlines at every date, headlines worked out once. `Store.board` holds them; views slice by date.
 typealias BoardItem = Deadline
 
+/// `f` on every item with at most `limit` running at once (B7, deadline-priority.md §5.4); outputs come back in input
+/// order, so subject order, hues and warnings stay deterministic. The first error cancels the running calls and is
+/// rethrown, so a caller that must keep earlier answers stores them inside `f`.
+func boundedMap<T: Sendable, R: Sendable>(_ items: [T], limit: Int, _ f: @escaping @Sendable (T) async throws -> R) async throws -> [R] {
+    try await withThrowingTaskGroup(of: (Int, R).self) { group in
+        var out = [R?](repeating: nil, count: items.count), next = 0
+        while next < min(max(limit, 1), items.count) {
+            let i = next
+            group.addTask { (i, try await f(items[i])) }
+            next += 1
+        }
+        while let done = try await group.next() {
+            out[done.0] = done.1
+            if next < items.count {
+                let i = next
+                group.addTask { (i, try await f(items[i])) }
+                next += 1
+            }
+        }
+        return out.map { $0! }
+    }
+}
+
 func boardItems(_ subjects: [Subject]) -> [BoardItem] {
     var ids = Set<String>() // SwiftUI's ForEach needs unique ids: keep the first (`cluster` merges true duplicates already)
     return deadlines(subjects, in: Date.distantPast..<Date.distantFuture).filter { ids.insert($0.id).inserted }

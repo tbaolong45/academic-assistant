@@ -55,6 +55,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     private var mail = MailCache.load() // forwarded school mail by Gmail UID, plus download progress
     private var titles = SummaryCache.load() // DeepSeek titles + Jev's checks, by source hash
     private var summarizing = false
+    private var summaryDone = 0 // titles written by the running summarize()
 
     var lastSynced: Date? { if case .live(let d) = source { d } else { nil } }
 
@@ -200,12 +201,16 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         let gen = generation
         classifyTask = Task {
             defer { classifying = false }
-            var done = 0, failure: String?
-            for text in texts.prefix(300) where !Task.isCancelled { // ponytail: one at a time, 300 per sync; parallelise if the first run feels slow
-                classifierNote = "classifying \(done + 1) of \(min(texts.count, 300))…"
-                do { known[Jev.id(text)] = try await Jev.classify(text, key: key); done += 1 }
-                catch { failure = error.localizedDescription; break }
-            }
+            let batch = Array(texts.prefix(300)), before = known.count // 300 per sync
+            var failure: String?
+            classifierNote = "classifying \(batch.count)…"
+            do { // 4 at once (§5.4, D7); each answer is kept as it arrives, so a failure keeps the ones before it
+                _ = try await boundedMap(batch, limit: 4) { [weak self] text in
+                    let answer = try await Jev.classify(text, key: key)
+                    await self?.learned(text, answer, progress: (before, batch.count))
+                }
+            } catch { failure = error.localizedDescription }
+            let done = known.count - before
             save { try KindCache.save(known) } // labels are keyed by text, so keeping them is always safe
             // A newer sync or a disconnect happened meanwhile: don't publish into it (the next publish picks the labels up).
             guard Self.isCurrent(generation: gen, current: generation), !Task.isCancelled else { return }
@@ -216,6 +221,20 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         }
     }
 
+    /// One Jev label as it arrives (classify runs 4 at once).
+    private func learned(_ text: String, _ answer: Jev.Answer, progress: (before: Int, total: Int)) {
+        known[Jev.id(text)] = answer
+        classifierNote = "classifying \(known.count - progress.before) of \(progress.total)…"
+    }
+
+    /// One title as it arrives (summarize runs 2 items at once); saved every 10, so a quit mid-run keeps most of them.
+    private func titled(_ e: CourseEvent, _ s: Summary, total: Int) {
+        titles[Summarizer.id(e)] = s
+        summaryDone += 1
+        summaryNote = "summarizing \(summaryDone) of \(total)…"
+        if summaryDone % 10 == 0 { save { try SummaryCache.save(titles) } }
+    }
+
     /// Titles for dated items on the board from a week ago to 4 months ahead: Jev picks the parts, DeepSeek writes, Jev checks.
     private func summarize() {
         guard isConnected, lastSynced != nil, !summarizing, !classifying, let jev = Keychain.read(host: Jev.account), let ds = Keychain.read(host: DeepSeek.account) else { return }
@@ -223,20 +242,21 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         let todo = Summarizer.targets(subjects, board: items, titles: titles, window: window)
         guard !todo.isEmpty else { return }
         summarizing = true
+        summaryDone = 0
         let gen = generation
         summarizeTask = Task {
             defer { summarizing = false }
-            var done = 0, rejected = 0, failure: String?
-            for (course, e) in todo.prefix(80) where !Task.isCancelled { // ponytail: 80 items (≈240 calls) per sync, one at a time
-                summaryNote = "summarizing \(done + 1) of \(min(todo.count, 80))…"
-                do {
-                    let s = try await Summarizer.summarize(e, course: course, jevKey: jev, deepSeekKey: ds)
-                    titles[Summarizer.id(e)] = s
-                    if !s.accepted { rejected += 1 }
-                    done += 1
-                    if done % 10 == 0 { save { try SummaryCache.save(titles) } }
-                } catch { failure = error.localizedDescription; break }
-            }
+            let batch = Array(todo.prefix(80)) // 80 items (≈240 calls) per sync
+            var failure: String?
+            summaryNote = "summarizing \(batch.count)…"
+            do { // 2 items at once (§5.4): DeepSeek's rate limit plus Jev's checks; each title is kept as it arrives
+                _ = try await boundedMap(batch, limit: 2) { [weak self] item in
+                    let s = try await Summarizer.summarize(item.event, course: item.course, jevKey: jev, deepSeekKey: ds)
+                    await self?.titled(item.event, s, total: batch.count)
+                }
+            } catch { failure = error.localizedDescription }
+            let new = batch.compactMap { titles[Summarizer.id($0.event)] }
+            let done = new.count, rejected = new.filter { !$0.accepted }.count
             // Prune only against the subjects this run started from: after a disconnect `subjects` is sample data, and
             // pruning against it would delete every paid title. Unpruned titles are still saved.
             guard Self.isCurrent(generation: gen, current: generation), !Task.isCancelled else {

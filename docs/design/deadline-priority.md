@@ -223,7 +223,7 @@ TED example: "TED-Talk Script (8%)" gives {ted, talk, script}. "TED Script due 1
 
 - If the cue matches and the date follows it, set `moved = true`.
 - Dates in the same sentence before the cue ("moved **from 20 Oct** to 1 Nov") are dropped.
-- Jev's `class_change` label also counts as moved, so wording the regex misses is still caught.
+- Jev's `class_change` label does **not** set `moved`. It affects only which date wins inside an existing cluster (§2.4), within the normal window. It never opens the 30-day supersede window or the rule-3 exception in §2.2, because Jev also labels holidays ("no classes") `class_change` (B4 deviation #4, kept).
 
 ### 2.4 Which member shows, and with what date
 

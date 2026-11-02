@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import PDFKit
 
 /// Local copies of Moodle course files: ~/Documents/Academic Assistant/<Course>/<file>.
@@ -55,6 +56,10 @@ enum MaterialStore {
         try FileManager.default.moveItem(at: tmp, to: to)
     }
 
+    private static func key(_ url: URL, _ f: MaterialFile) -> PDFCache.Key {
+        PDFCache.Key(path: url.path(percentEncoded: false), size: f.size, modified: f.modified)
+    }
+
     /// Dates written in every downloaded PDF (syllabus, schedules, briefs, slides…), per subject id. Slow: run off the main thread.
     static func documentEvents(_ subjects: [Subject]) -> [String: [CourseEvent]] {
         var out: [String: [CourseEvent]] = [:]
@@ -62,9 +67,9 @@ enum MaterialStore {
             for m in s.materials {
                 for f in m.files ?? [] where f.name.lowercased().hasSuffix(".pdf") {
                     let url = localURL(s, m, f)
-                    guard isSaved(url, f), let text = PDFDocument(url: url)?.string else { continue }
-                    let posted = f.modified > 0 ? Date(timeIntervalSince1970: Double(f.modified)) : .now
-                    out[s.id, default: []] += Moodle.mentionedDates(text, posted: posted, source: .document, strict: true)
+                    guard isSaved(url, f), let entry = PDFCache.entry(key(url, f), load: { PDFDocument(url: url)?.string }) else { continue }
+                    let posted = PDFCache.posted(f.modified)
+                    out[s.id, default: []] += entry.found
                         // skip Moodle's download stamp ("…203.0.113.7 on Wed, 09 Sep 2026 06:48 UTC") and repeats across pages
                         .filter { ($0.detail ?? "").range(of: #"\b\d{1,3}(\.\d{1,3}){3}\b"#, options: .regularExpression) == nil }
                         // within ~9 months of now: chart axes ("07 Sep 35") and cited years (1979, 2025) aren't this semester
@@ -86,7 +91,7 @@ enum MaterialStore {
         for m in s.materials {
             for f in m.files ?? [] where f.name.lowercased().hasSuffix(".pdf") {
                 let url = localURL(s, m, f)
-                guard isSaved(url, f), let text = PDFDocument(url: url)?.string else { continue }
+                guard isSaved(url, f), let text = PDFCache.entry(key(url, f), load: { PDFDocument(url: url)?.string })?.text else { continue }
                 let lines = text.components(separatedBy: .newlines)
                 var i = 0
                 while i < lines.count {
@@ -112,3 +117,25 @@ enum MaterialStore {
 }
 
 struct DocumentMention: Identifiable, Sendable { let id: String, file: String, text: String }
+
+/// Each downloaded PDF's text and dates, read once per app run and again only when Moodle reports a new size or modified
+/// time (B7, §5.4). In memory on purpose: course-PDF text on disk would be a new sensitive file for little gain.
+enum PDFCache {
+    struct Key: Hashable, Sendable { let path: String, size: Int, modified: Int }
+    struct Entry: Sendable {
+        let text: String
+        let found: [CourseEvent] // `mentionedDates` of the text, before the per-run filters
+    }
+    /// The file's Moodle modified time, or now when Moodle gave none.
+    static func posted(_ modified: Int) -> Date { modified > 0 ? Date(timeIntervalSince1970: Double(modified)) : .now }
+    private static let entries = Mutex<[String: (key: Key, entry: Entry)]>([:]) // by path: a changed file replaces its entry
+
+    /// The cached entry for `key`, else `load()` (the file read) parsed and stored; nil when the file has no text.
+    static func entry(_ key: Key, load: () -> String?) -> Entry? {
+        if let hit = entries.withLock({ $0[key.path] }), hit.key == key { return hit.entry }
+        guard let text = load() else { return nil }
+        let entry = Entry(text: text, found: Moodle.mentionedDates(text, posted: posted(key.modified), source: .document, strict: true))
+        entries.withLock { $0[key.path] = (key, entry) }
+        return entry
+    }
+}

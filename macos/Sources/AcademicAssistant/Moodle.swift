@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // Moodle web-service client (REST, JSON) + mapping to the app model. Field names checked against the
 // MOODLE_405_STABLE source (*_returns() definitions). Everything not guaranteed by Moodle is optional.
@@ -32,9 +33,18 @@ struct MoodleSync: Codable, Sendable {
     var synced: Date
 }
 
+/// Counts Moodle calls (`--moodle-check` prints it); shared by the parallel children of one sync.
+final class CallCounter: Sendable {
+    private let n = Mutex(0)
+    func add() { n.withLock { $0 += 1 } }
+    var value: Int { n.withLock { $0 } }
+}
+
 struct Moodle: Sendable {
     let site: URL
     private let token: String
+    private let counter = CallCounter()
+    var calls: Int { counter.value }
     // Ephemeral: no disk URL cache, so token-bearing request URLs are never written to ~/Library/Caches.
     private static let session = URLSession(configuration: .ephemeral)
 
@@ -68,6 +78,7 @@ struct Moodle: Sendable {
         c?.queryItems = [.init(name: "wstoken", value: token), .init(name: "wsfunction", value: fn), .init(name: "moodlewsrestformat", value: "json")]
             + params.map { URLQueryItem(name: $0.0, value: $0.1) }
         guard let url = c?.url, url.scheme == "https" else { throw MoodleError.insecureSite }
+        counter.add()
         let data: Data, response: URLResponse
         do { (data, response) = try await Self.session.data(from: url) } catch {
             // Only the description: the NSError's userInfo holds the full URL (with the key).
@@ -117,7 +128,26 @@ struct Moodle: Sendable {
         } + other
     }
 
-    // ponytail: calls run one after another (~3 per course + 5 shared); parallelise with a TaskGroup if syncs feel slow.
+    /// One course's grades, contents and forum discussions (4 courses at once, §5.4); warnings come back with it, in order.
+    private struct CourseData: Sendable {
+        var grades: GradeItems?, contents: [Section]?
+        var forums: [(news: Bool, posts: [Announcement])]
+        var warnings: [String]
+    }
+
+    private func courseData(_ c: Course, code: String, uid: String, forums: [Forum]) async throws -> CourseData {
+        var w: [String] = []
+        let grades: GradeItems? = try await soft("\(code) grades", "gradereport_user_get_grade_items", [("courseid", String(c.id)), ("userid", uid)], &w)
+        let contents: [Section]? = try await soft("\(code) materials", "core_course_get_contents", [("courseid", String(c.id))], &w)
+        var posts: [(news: Bool, posts: [Announcement])] = []
+        for f in forums where f.course == c.id { // announcements + every discussion forum
+            let d: Discussions? = try await soft("\(code) announcements", "mod_forum_get_forum_discussions",
+                                                 [("forumid", String(f.id)), ("page", "0"), ("perpage", "100")], &w)
+            posts.append((f.type == "news", (d?.discussions ?? []).map(Self.announcement)))
+        }
+        return CourseData(grades: grades, contents: contents, forums: posts, warnings: w)
+    }
+
     func sync(now: Date = .now) async throws -> MoodleSync {
         let info = try await siteInfo()
         let uid = String(info.userid)
@@ -141,12 +171,17 @@ struct Moodle: Sendable {
         let pending = Set((events?.events ?? []).filter { $0.modulename == "assign" && $0.action != nil }.compactMap(\.instance))
         // The real status of every assignment (the action list above is capped and fills up with attendance sessions).
         var submitted: [Int: Bool] = [:], extensions: [Int: Int] = [:], statusError: String?
-        for a in (assigns?.courses ?? []).flatMap(\.assignments) {
+        let assignIDs = (assigns?.courses ?? []).flatMap(\.assignments).map(\.id)
+        let statuses = try await boundedMap(assignIDs, limit: 4) { id -> (status: String?, ext: Int?, error: String?) in
             do {
-                let s: SubmissionStatus = try await call("mod_assign_get_submission_status", [("assignid", String(a.id))])
-                if let st = s.lastattempt?.submission?.status ?? s.lastattempt?.teamsubmission?.status { submitted[a.id] = st == "submitted" }
-                if let ext = s.lastattempt?.extensionduedate, ext > 0 { extensions[a.id] = ext }
-            } catch { statusError = statusError ?? Self.redact(error.localizedDescription) }
+                let s: SubmissionStatus = try await self.call("mod_assign_get_submission_status", [("assignid", String(id))])
+                return (s.lastattempt?.submission?.status ?? s.lastattempt?.teamsubmission?.status, s.lastattempt?.extensionduedate, nil)
+            } catch { return (nil, nil, Self.redact(error.localizedDescription)) }
+        }
+        for (id, s) in zip(assignIDs, statuses) {
+            if let st = s.status { submitted[id] = st == "submitted" }
+            if let ext = s.ext, ext > 0 { extensions[id] = ext }
+            if let e = s.error { statusError = statusError ?? e }
         }
         if let statusError { warnings.append("Submission status unavailable (\(statusError)); using dates and grades instead") }
         // Every calendar event of the semester (exams and deadlines teachers add by hand, not only activities).
@@ -157,22 +192,24 @@ struct Moodle: Sendable {
                ("options[timeend]", String(Int(now.timeIntervalSince1970) + 365 * 86_400))]
         let calendar: CalendarEvents? = try await soft("Calendar events", "core_calendar_get_calendar_events", calParams, &warnings)
 
+        let members = shown.flatMap { g in g.members.map { (code: g.code, course: $0) } }
+        let fetched = try await boundedMap(members, limit: 4) { m in
+            try await self.courseData(m.course, code: m.code, uid: uid, forums: forums ?? [])
+        }
+        let byCourse = Dictionary(zip(members.map(\.course.id), fetched), uniquingKeysWith: { a, _ in a })
+
         var subjects: [Subject] = []
         for (i, g) in shown.enumerated() {
             // A lecture and its "- Lab" share a course code: one subject, items merged from every Moodle course in the group.
             var assessments: [Assessment] = [], assignments: [AssignmentItem] = [], materials: [Material] = [], news: [Announcement] = [], teacherNews: [Announcement] = []
             for c in g.members {
-                let code = g.code
                 let start = Self.date(c.startdate ?? 0) ?? now
-                let grades: GradeItems? = try await soft("\(code) grades", "gradereport_user_get_grade_items",
-                                                         [("courseid", String(c.id)), ("userid", uid)], &warnings)
-                let contents: [Section]? = try await soft("\(code) materials", "core_course_get_contents", [("courseid", String(c.id))], &warnings)
-                for f in forums ?? [] where f.course == c.id { // announcements + every discussion forum
-                    let d: Discussions? = try await soft("\(code) announcements", "mod_forum_get_forum_discussions",
-                                                         [("forumid", String(f.id)), ("page", "0"), ("perpage", "100")], &warnings)
-                    let posts = (d?.discussions ?? []).map(Self.announcement)
-                    news += posts
-                    if f.type == "news" { teacherNews += posts } // dates only from the teacher's news, not classmates' posts
+                let data = byCourse[c.id]!
+                warnings += data.warnings // in course order, as when the calls ran one by one
+                let grades = data.grades, contents = data.contents
+                for f in data.forums {
+                    news += f.posts
+                    if f.news { teacherNews += f.posts } // dates only from the teacher's news, not classmates' posts
                 }
                 // Effective dates first, so the gradebook items dated by these assignments get the extension too.
                 let courseAssigns = (assigns?.courses.first { $0.id == c.id }?.assignments ?? []).map { Self.effective($0, extension: extensions[$0.id]) }
@@ -689,7 +726,8 @@ func runMoodleCheck() -> Never {
     guard let creds = MoodleAccount.credentials() else { print("no key stored"); exit(2) }
     Task.detached {
         do {
-            let r = try await Moodle(site: creds.site, token: creds.token).sync()
+            let started = Date.now, moodle = Moodle(site: creds.site, token: creds.token)
+            let r = try await moodle.sync()
             let a = r.subjects.flatMap(\.assessments)
             print([
                 "courses: \(r.subjects.count) (\(r.subjects.map(\.code).joined(separator: ", ")))",
@@ -698,6 +736,8 @@ func runMoodleCheck() -> Never {
                 "announcements: \(r.subjects.reduce(0) { $0 + $1.announcements.count })",
                 "materials: \(r.subjects.reduce(0) { $0 + $1.materials.count })",
                 "warnings: \(r.warnings.count)",
+                "calls: \(moodle.calls)",
+                String(format: "time: %.1f s", Date.now.timeIntervalSince(started)),
             ].joined(separator: " · "))
             r.warnings.forEach { print("  - \($0)") }
             exit(0)
