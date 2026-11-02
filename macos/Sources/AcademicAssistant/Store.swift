@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -24,6 +25,8 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     @Published private(set) var source: Source = .sample
     @Published var syncError: String?
     private var lastSyncPartial = false // a sync with warnings may have missed items: don't diff against it
+    private var lastSlow: Date? // the last slow-tier sync this run (P6); nil = the next sync is slow
+    private var activation: AnyCancellable?
     @Published private(set) var warnings: [String] = [] // non-fatal sync notes (a course part skipped, >5 courses)
     @Published private(set) var syncing = false
     @Published private(set) var isConnected = false
@@ -62,6 +65,9 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
 
     /// With a stored key: open on the last synced data (works offline), then sync now and every 15 minutes.
     init() {
+        // P6: bringing the window forward refreshes grades and files at once.
+        activation = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in Task { @MainActor in self?.cameForward() } }
         guard MoodleAccount.credentials() != nil else { return }
         Notifier.requestPermission()
         isConnected = true
@@ -131,12 +137,22 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         }
     }
 
-    func syncNow() { syncTask = Task { await sync() } }
+    func syncNow() { syncTask = Task { await sync(manual: true) } } // ⌘R: always the slow tier
+
+    /// The app came forward: a slow sync, unless one finished in the last 5 minutes. ponytail: that throttle is ours,
+    /// not the spec's, so switching apps doesn't cost ~90 Moodle calls each time; drop it if a fresher grade is wanted.
+    private func cameForward() {
+        guard isConnected, !syncing, Date.now.timeIntervalSince(lastSlow ?? .distantPast) > 5 * 60 else { return }
+        syncTask = Task { await sync(cameForward: true) }
+    }
 
     /// Moodle, Outlook and mail load side by side and are published once, when all are in. Downloads and the PDF scan
     /// that follow publish once more.
-    func sync() async {
+    func sync(manual: Bool = false, cameForward: Bool = false) async {
         guard !syncing, let creds = MoodleAccount.credentials() else { return }
+        let started = Date.now
+        // The fast tier merges into `base`, so it needs one: the first sync of a run, or after a disconnect, is slow.
+        let tier = base.isEmpty ? .slow : Tier.next(now: started, lastSlow: lastSlow, manual: manual, cameForward: cameForward)
         generation += 1
         let gen = generation
         syncing = true
@@ -144,7 +160,10 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         async let outlook = fetchOutlook()
         async let newMail = fetchMail()
         let moodle: Result<MoodleSync, Error>
-        do { moodle = .success(try await Moodle(site: creds.site, token: creds.token).sync()) } catch { moodle = .failure(error) }
+        do {
+            let previous = base, r = try await Moodle(site: creds.site, token: creds.token).sync(fast: tier == .fast, previous: previous)
+            moodle = .success(tier == .fast ? Moodle.merge(fast: r, previous: previous) : r)
+        } catch { moodle = .failure(error) }
         let (items, fetched) = await (outlook, newMail)
         guard Self.isCurrent(generation: gen, current: generation) else { return } // disconnected meanwhile
         if let items { calendarItems = items }
@@ -157,6 +176,12 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
             publish()
             if let previous, result.warnings.isEmpty, !lastSyncPartial { Notifier.post(Notifier.changes(old: previous, new: result.subjects)) }
             lastSyncPartial = !result.warnings.isEmpty
+            guard tier == .slow else { // fast: no files or PDF dates (slow tier), and no prune (that needs a complete board)
+                classify() // new posts and messages get their labels and titles now, not at the next slow sync
+                summarize() // (classify starts it itself when it has work; this covers the case where it hasn't)
+                return
+            }
+            lastSlow = started // even with warnings: retrying slow every 5 min would be today's load again
             let downloaded = await downloadMaterials(token: creds.token)
             let scanned = await scanDocuments(gen)
             // Only a complete board says an item is gone: every configured source must have come through (Moodle with no

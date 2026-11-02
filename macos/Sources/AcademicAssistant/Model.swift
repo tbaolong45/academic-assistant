@@ -49,6 +49,26 @@ struct AssignmentItem: Hashable, Sendable {
     var moodleID: Int? = nil // Assign.id: a stable identity (nil in caches from before B2)
     var cutoff: Date? = nil // late submissions close then (Moodle cutoffdate, extension applied); nil = late work stays open
     var extended: Bool? = nil // `due` is the student's extension, later than the assignment's own due date
+    var graded: Bool? = nil // a mark is in the gradebook: no more status calls (P6), carried through fast syncs
+}
+
+/// P6 (backend-review.md O2): a fast sync every 5 min (statuses, calendar, news, messages, notifications); a slow one
+/// (grades, course contents, all discussions, downloads, PDF dates) every 60 min, on ⌘R and when the window comes forward.
+enum Tier: Sendable, Equatable {
+    case fast, slow
+    static func next(now: Date, lastSlow: Date?, manual: Bool, cameForward: Bool) -> Tier {
+        guard let lastSlow, !manual, !cameForward else { return .slow }
+        return now.timeIntervalSince(lastSlow) >= 60 * 60 ? .slow : .fast
+    }
+}
+
+/// Whether an assignment's submission status is still worth a call (P6): not graded, and still open to hand in: due
+/// in the future (or no due date), before its cutoff, or at most `Ranking.overdueDays` past due. The call also carries
+/// the student's extension, so it keeps running while late work is accepted.
+func needsStatus(dueDate: Date, cutoff: Date?, graded: Bool, now: Date) -> Bool {
+    guard !graded else { return false }
+    if dueDate >= now || (cutoff.map { $0 > now } ?? false) { return true }
+    return now.timeIntervalSince(dueDate) <= Ranking.overdueDays * 86_400
 }
 
 /// "TED-Talk Script (8%)" / "Critical Writing - Final Paper - 14%" → 8 / 14; nil if the title names no percentage.

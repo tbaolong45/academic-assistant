@@ -102,6 +102,30 @@ struct Moodle: Sendable {
         }
     }
 
+    /// A fast sync on top of the last slow one (P6): grades (assessments) and materials stay as they were; assignments,
+    /// announcements, messages and events come from the fast sync. Kept from before: course-page dates (contents are
+    /// slow) and forum posts the fast sync didn't fetch (every forum but news). ponytail: a deleted post lingers until the
+    /// next slow sync (≤ 60 min), since a post doesn't record which forum it came from.
+    static func merge(fast: MoodleSync, previous: [Subject]) -> MoodleSync {
+        let old = Dictionary(previous.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var subjects = fast.subjects.map { s -> Subject in
+            guard let p = old[s.id] else { return s }
+            let have = Set(s.announcements.map(\.key))
+            return Subject(id: s.id, name: s.name, code: s.code, hue: s.hue, assessments: p.assessments, assignments: s.assignments,
+                           materials: p.materials,
+                           announcements: (s.announcements + p.announcements.filter { $0.source == .moodle && !have.contains($0.key) })
+                               .sorted { $0.date > $1.date },
+                           events: ((s.events ?? []) + (p.events ?? []).filter { $0.resolvedVia == .coursePage }).sorted { $0.date < $1.date })
+        }
+        // General can consist of shared course-page dates alone, which the fast sync doesn't see.
+        if !subjects.contains(where: { $0.id == "general" }), let g = old["general"],
+           case let pages = (g.events ?? []).filter({ $0.resolvedVia == .coursePage }), !pages.isEmpty {
+            subjects.append(Subject(id: g.id, name: g.name, code: g.code, hue: g.hue, assessments: [], assignments: [], materials: [],
+                                    announcements: [], events: pages))
+        }
+        return MoodleSync(siteName: fast.siteName, subjects: subjects, warnings: fast.warnings, synced: fast.synced)
+    }
+
     /// "Fall 2026/2027 Introduction to AI (AI1010-001)" → ("Introduction to AI", "AI1010"); nil for trainings without a course code.
     static func courseLabel(_ fullname: String) -> (name: String, code: String)? {
         guard let m = fullname.firstMatch(of: /^(?:(?:Fall|Spring|Summer|Winter)\s+\d{4}(?:\/\d{4})?\s+)?(.+?)\s*\(([A-Z]{2,5}\s?\d{3,4}[A-Z]?)(?:-\d+)?\)\s*$/)
@@ -138,12 +162,15 @@ struct Moodle: Sendable {
         var warnings: [String]
     }
 
-    private func courseData(_ c: Course, code: String, uid: String, forums: [Forum]) async throws -> CourseData {
-        var w: [String] = []
-        let grades: GradeItems? = try await soft("\(code) grades", "gradereport_user_get_grade_items", [("courseid", String(c.id)), ("userid", uid)], &w)
-        let contents: [Section]? = try await soft("\(code) materials", "core_course_get_contents", [("courseid", String(c.id))], &w)
+    /// Fast tier: only the news forums (grades, contents and other discussions come from the previous slow sync).
+    private func courseData(_ c: Course, code: String, uid: String, forums: [Forum], fast: Bool) async throws -> CourseData {
+        var w: [String] = [], grades: GradeItems?, contents: [Section]?
+        if !fast {
+            grades = try await soft("\(code) grades", "gradereport_user_get_grade_items", [("courseid", String(c.id)), ("userid", uid)], &w)
+            contents = try await soft("\(code) materials", "core_course_get_contents", [("courseid", String(c.id))], &w)
+        }
         var posts: [(news: Bool, posts: [Announcement])] = []
-        for f in forums where f.course == c.id { // announcements + every discussion forum
+        for f in forums where f.course == c.id && (!fast || f.type == "news") { // announcements + every discussion forum
             let d: Discussions? = try await soft("\(code) announcements", "mod_forum_get_forum_discussions",
                                                  [("forumid", String(f.id)), ("page", "0"), ("perpage", "100")], &w)
             posts.append((f.type == "news", (d?.discussions ?? []).map(Self.announcement)))
@@ -151,7 +178,9 @@ struct Moodle: Sendable {
         return CourseData(grades: grades, contents: contents, forums: posts, warnings: w)
     }
 
-    func sync(now: Date = .now) async throws -> MoodleSync {
+    /// `fast`: the P6 fast tier; merge its result into the last slow one with `Moodle.merge(fast:previous:)`.
+    /// `previous` (the last sync's subjects) gives the status of assignments that no longer need a status call.
+    func sync(now: Date = .now, fast: Bool = false, previous: [Subject] = []) async throws -> MoodleSync {
         let info = try await siteInfo()
         let uid = String(info.userid)
         let enrolled: [Course] = try await call("core_enrol_get_users_courses", [("userid", uid)])
@@ -171,10 +200,29 @@ struct Moodle: Sendable {
                                              [("timesortfrom", String(Int(now.timeIntervalSince1970) - 30 * 86_400)), ("limitnum", "50")], &warnings)
         let forums: [Forum]? = try await soft("Forums", "mod_forum_get_forums_by_courses", ids, &warnings)
         // Fallback only: an assignment still waiting on the student keeps its calendar action ("Add submission").
+        let members = shown.flatMap { g in g.members.map { (code: g.code, course: $0) } }
+        let fetched = try await boundedMap(members, limit: 4) { m in
+            try await self.courseData(m.course, code: m.code, uid: uid, forums: forums ?? [], fast: fast)
+        }
+        let byCourse = Dictionary(zip(members.map(\.course.id), fetched), uniquingKeysWith: { a, _ in a })
+        // Graded assignments: from this sync's gradebook, or (fast tier, no gradebook) as the previous sync left them.
+        let before = Dictionary(previous.flatMap(\.assignments).compactMap { a in a.moodleID.map { ($0, a) } }, uniquingKeysWith: { a, _ in a })
+        let graded = fast ? Set(before.filter { $0.value.graded == true }.keys)
+            : Set(fetched.flatMap { $0.grades?.usergrades.first?.gradeitems ?? [] }.filter { $0.itemmodule == "assign" && $0.graderaw != nil }.compactMap(\.iteminstance))
+
         let pending = Set((events?.events ?? []).filter { $0.modulename == "assign" && $0.action != nil }.compactMap(\.instance))
-        // The real status of every assignment (the action list above is capped and fills up with attendance sessions).
+        // The real status of every live assignment (the action list above is capped and fills up with attendance sessions).
+        // The others keep what the previous sync knew: their status and extension (P6).
         var submitted: [Int: Bool] = [:], extensions: [Int: Int] = [:], statusError: String?
-        let assignIDs = (assigns?.courses ?? []).flatMap(\.assignments).map(\.id)
+        let live = (assigns?.courses ?? []).flatMap(\.assignments).filter { a in
+            let due = before[a.id].flatMap { $0.extended == true ? $0.due : nil } ?? Self.date(a.duedate ?? 0) ?? .distantFuture
+            return needsStatus(dueDate: due, cutoff: Self.date(a.cutoffdate ?? 0), graded: graded.contains(a.id), now: now)
+        }
+        for (id, p) in before where !live.contains(where: { $0.id == id }) {
+            submitted[id] = p.status == .submitted
+            if p.extended == true { extensions[id] = Int(p.due.timeIntervalSince1970) }
+        }
+        let assignIDs = live.map(\.id)
         let statuses = try await boundedMap(assignIDs, limit: 4) { id -> (status: String?, ext: Int?, error: String?) in
             do {
                 let s: SubmissionStatus = try await self.call("mod_assign_get_submission_status", [("assignid", String(id))])
@@ -198,12 +246,6 @@ struct Moodle: Sendable {
                ("options[timeend]", String(Int(now.timeIntervalSince1970) + 365 * 86_400))]
         let calendar: CalendarEvents? = try await soft("Calendar events", "core_calendar_get_calendar_events", calParams, &warnings)
 
-        let members = shown.flatMap { g in g.members.map { (code: g.code, course: $0) } }
-        let fetched = try await boundedMap(members, limit: 4) { m in
-            try await self.courseData(m.course, code: m.code, uid: uid, forums: forums ?? [])
-        }
-        let byCourse = Dictionary(zip(members.map(\.course.id), fetched), uniquingKeysWith: { a, _ in a })
-
         var subjects: [Subject] = []
         for (i, g) in shown.enumerated() {
             // A lecture and its "- Lab" share a course code: one subject, items merged from every Moodle course in the group.
@@ -222,9 +264,7 @@ struct Moodle: Sendable {
                 assessments += Self.assessments(grades?.usergrades.first?.gradeitems ?? [], assigns: courseAssigns,
                                                 quizzes: (quizzes?.quizzes ?? []).filter { $0.course == c.id }, fallback: start)
                     .map { Assessment(id: "\(c.id)-\($0.id)", name: $0.name, type: $0.type, date: $0.date, weight: $0.weight, raw: $0.raw, topics: $0.topics, feedback: $0.feedback) }
-                let gradedAssigns = Set((grades?.usergrades.first?.gradeitems ?? [])
-                    .filter { $0.itemmodule == "assign" && $0.graderaw != nil }.compactMap(\.iteminstance))
-                assignments += Self.assignmentItems(courseAssigns, pending: pending, now: now, submitted: submitted, graded: gradedAssigns)
+                assignments += Self.assignmentItems(courseAssigns, pending: pending, now: now, submitted: submitted, graded: graded)
                 materials += Self.materials(contents ?? [], fallback: start) + Self.briefs(courseAssigns, fallback: start)
             }
             let courseIDs = Set(g.members.map(\.id))
@@ -481,7 +521,7 @@ extension Moodle {
                 let done = graded.contains(a.id) || (submitted[a.id] ?? ($0 > now ? false : !pending.contains(a.id)))
                 return AssignmentItem(title: a.name, due: $0, status: done ? .submitted : .open,
                                       details: a.intro.map(plainText).flatMap { $0.isEmpty ? nil : $0 }, moodleID: a.id,
-                                      cutoff: date(a.cutoffdate ?? 0), extended: a.extended)
+                                      cutoff: date(a.cutoffdate ?? 0), extended: a.extended, graded: graded.contains(a.id) ? true : nil)
             }
         }
         .sorted { $0.due < $1.due }
@@ -757,19 +797,26 @@ func runMoodleCheck() -> Never {
     Task.detached {
         do {
             let started = Date.now, moodle = Moodle(site: creds.site, token: creds.token)
-            let r = try await moodle.sync()
-            let a = r.subjects.flatMap(\.assessments)
-            print([
-                "courses: \(r.subjects.count) (\(r.subjects.map(\.code).joined(separator: ", ")))",
-                "assessments: \(a.count) (\(a.filter { $0.raw != nil }.count) graded)",
-                "deadlines next 7 days: \(deadlines(r.subjects).count)",
-                "announcements: \(r.subjects.reduce(0) { $0 + $1.announcements.count })",
-                "materials: \(r.subjects.reduce(0) { $0 + $1.materials.count })",
-                "warnings: \(r.warnings.count)",
-                "calls: \(moodle.calls)",
-                String(format: "time: %.1f s", Date.now.timeIntervalSince(started)),
-            ].joined(separator: " · "))
+            let r = try await moodle.sync(previous: MoodleCache.load()?.subjects ?? []) // as the app does: last statuses carried
+            func line(_ r: MoodleSync, _ m: Moodle, _ t0: Date) -> String { // the counts line; a fast run must match the slow one
+                let a = r.subjects.flatMap(\.assessments)
+                return [
+                    "courses: \(r.subjects.count) (\(r.subjects.map(\.code).joined(separator: ", ")))",
+                    "assessments: \(a.count) (\(a.filter { $0.raw != nil }.count) graded)",
+                    "deadlines next 7 days: \(deadlines(r.subjects).count)",
+                    "announcements: \(r.subjects.reduce(0) { $0 + $1.announcements.count })",
+                    "materials: \(r.subjects.reduce(0) { $0 + $1.materials.count })",
+                    "warnings: \(r.warnings.count)",
+                    "calls: \(m.calls)",
+                    String(format: "time: %.1f s", Date.now.timeIntervalSince(t0)),
+                ].joined(separator: " · ")
+            }
+            print("slow: " + line(r, moodle, started))
             r.warnings.forEach { print("  - \($0)") }
+            let fastStarted = Date.now, fastMoodle = Moodle(site: creds.site, token: creds.token)
+            let f = Moodle.merge(fast: try await fastMoodle.sync(fast: true, previous: r.subjects), previous: r.subjects)
+            print("fast: " + line(f, fastMoodle, fastStarted))
+            f.warnings.forEach { print("  - \($0)") }
             exit(0)
         } catch {
             print("sync failed: \(error.localizedDescription)")

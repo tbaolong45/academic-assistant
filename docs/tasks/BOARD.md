@@ -32,7 +32,8 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | B7 | Parallel AI calls (4 Jev / 2 DeepSeek) + `calls: N` counter | Builder + Test writer | Model, Moodle, Materials, Store | done; live timing (--moodle-check x2) needs the user; checks + review pending |
 | F1h | Cue + range fixes from F1g review (1 High) | Builder + Test writer | see docs/tasks/F1h-cue-range.md | done; gate 5 clusters; review pending |
 | F1i | B7 review fixes (1 High: same-size PDF update keeps old dates) | Builder + Test writer | see docs/tasks/F1i-b7-review.md | done; review pending |
-| P6 | Slow tier (60 min) for stale assignment status etc. | Builder + Test writer | Moodle, Store | in progress |
+| P6 | Slow tier (60 min) for stale assignment status etc. | Builder + Test writer | Model, Moodle, Store | done; live fast/slow call counts need the user; 5-min forward throttle with architect; review pending |
+| U6 | Final cleanup: remove Tech alias, techPanel, TypewriterTitle, TechBackground | Builder | Theme, Effects, App | in progress |
 | F1g | Merge rule by source (anchors 3 days, others same day/12 h) + cluster invariant; P9 board-only titles | Builder + Test writer | Model, Summarizer (see docs/tasks/F1g-merge-rule.md) | done; gate passed (6 clusters → 5, the 6th duplicate no longer created); review pending |
 | U5 | Course page + sheets restyle (+ U4 review #1/#2) | Builder | CourseView, CalendarView, AssessmentSheet, ConnectView, WhatIfPanel, ScoreChart, HomeView, WeekBoardParts | done; review pending; screens wait for cert |
 | B5 | Marks (done/dismiss/snooze) keyed by memberKey | Builder + Test writer | BoardState (new), Model, Store, WeekBoardParts | done; checks + review pending |

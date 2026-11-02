@@ -1240,6 +1240,98 @@ func runSelfCheck() -> Never {
           && pruneMarks(pdfMark, live: [], now: b3Now).isEmpty,
           "marks: a PDF date's mark survives a run where the file couldn't be read")
 
+    // MARK: - B7 review fixes (F1i)
+
+    let savedDir = FileManager.default.temporaryDirectory.appendingPathComponent("aa-saved-\(UUID().uuidString)", isDirectory: true)
+    do {
+        defer { try? FileManager.default.removeItem(at: savedDir) }
+        try FileManager.default.createDirectory(at: savedDir, withIntermediateDirectories: true)
+        let savedURL = savedDir.appendingPathComponent("doc.pdf")
+        let savedPath = savedURL.path(percentEncoded: false)
+        let moodleModified = 1_700_000_000
+        try Data(repeating: 0x41, count: 64).write(to: savedURL)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(moodleModified - 3600))], ofItemAtPath: savedPath)
+        let remoteFile = MaterialFile(name: "doc.pdf", url: "https://x/doc.pdf", size: 64, modified: moodleModified)
+        let staleSaved = MaterialStore.isSaved(savedURL, remoteFile)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(moodleModified))], ofItemAtPath: savedPath)
+        let freshSaved = MaterialStore.isSaved(savedURL, remoteFile)
+        try Data().write(to: savedURL)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(moodleModified + 3600))], ofItemAtPath: savedPath)
+        let emptySaved = MaterialStore.isSaved(savedURL, remoteFile)
+        check(!staleSaved && freshSaved && !emptySaved,
+              "b7: a same-size file older than Moodle's modified time is re-downloaded; an empty file isn't saved (got \(staleSaved)/\(freshSaved)/\(emptySaved))")
+    } catch { check(false, "b7: isSaved fixtures run (\(error))") }
+
+    final class PDFLoads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        func bump() { lock.lock(); n += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    }
+    let flightLoads = PDFLoads()
+    let flightKey = PDFCache.Key(path: "/tmp/aa-fixture-flight.pdf", size: 5, modified: 300)
+    let flightDone = DispatchSemaphore(value: 0)
+    Task {
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<2 {
+                group.addTask {
+                    _ = PDFCache.entry(flightKey) {
+                        flightLoads.bump()
+                        Thread.sleep(forTimeInterval: 0.2)
+                        return "Quiz on 5 Nov"
+                    }
+                }
+            }
+        }
+        flightDone.signal()
+    }
+    _ = flightDone.wait(timeout: .now() + 10)
+    check(flightLoads.count == 1, "b7: two first-time callers of one PDF parse it once (loads \(flightLoads.count))")
+
+    // MARK: - Tiered cadence (P6)
+
+    let tierNow = b3At(2026, 11, 2, 12)
+    check(Tier.next(now: tierNow, lastSlow: nil, manual: false, cameForward: false) == .slow
+          && Tier.next(now: tierNow, lastSlow: tierNow.addingTimeInterval(-60 * 60), manual: false, cameForward: false) == .slow
+          && Tier.next(now: tierNow, lastSlow: tierNow.addingTimeInterval(-59 * 60), manual: false, cameForward: false) == .fast
+          && Tier.next(now: tierNow, lastSlow: tierNow.addingTimeInterval(-60), manual: true, cameForward: false) == .slow
+          && Tier.next(now: tierNow, lastSlow: tierNow.addingTimeInterval(-60), manual: false, cameForward: true) == .slow,
+          "sync: 60 min, a manual refresh or a forward clock jump runs slow; 59 min runs fast")
+    check(needsStatus(dueDate: b3Now.addingTimeInterval(86_400), cutoff: nil, graded: false, now: b3Now)
+          && needsStatus(dueDate: b3Now.addingTimeInterval(-13 * 86_400), cutoff: nil, graded: false, now: b3Now)
+          && needsStatus(dueDate: b3Now.addingTimeInterval(-14 * 86_400), cutoff: nil, graded: false, now: b3Now)
+          && !needsStatus(dueDate: b3Now.addingTimeInterval(-15 * 86_400), cutoff: nil, graded: false, now: b3Now)
+          && !needsStatus(dueDate: b3Now.addingTimeInterval(86_400), cutoff: nil, graded: true, now: b3Now)
+          && needsStatus(dueDate: .distantFuture, cutoff: nil, graded: false, now: b3Now),
+          "sync: submission status is asked while ungraded and up to 14 days past due (graded, 15 days and no due date excluded)")
+    let prevAssessment = Assessment(id: "p1", name: "Quiz 1", type: .quiz, date: b3Now, weight: 10,
+                                    raw: .init(got: 8, max: 10), topics: [])
+    let prevMaterial = Material(title: "Slides", kind: .slides, date: b3Now)
+    let prevAnnouncement = Announcement(title: "Old news", source: .moodle, from: "T", date: b3Now.addingTimeInterval(-86_400))
+    let prevPageEvent = CourseEvent(title: "Quiz 2 on 5 Nov", date: b3Now, source: .document,
+                                    detail: "On the course page: Quiz 2", via: .coursePage)
+    let prevSubject = Subject(id: "c1", name: "C1", code: "C1", hue: .green, assessments: [prevAssessment],
+                              assignments: [AssignmentItem(title: "Old", due: b3Now, status: .open)], materials: [prevMaterial],
+                              announcements: [prevAnnouncement], events: [prevPageEvent])
+    let fastSubject = Subject(id: "c1", name: "C1", code: "C1", hue: .green, assessments: [],
+                              assignments: [AssignmentItem(title: "New task", due: b3Now.addingTimeInterval(86_400), status: .open)],
+                              materials: [], announcements: [Announcement(title: "New news", source: .moodle, from: "T", date: b3Now)],
+                              events: [CourseEvent(title: "Exam", date: b3Now.addingTimeInterval(2 * 86_400), source: .calendar)])
+    let mergedFast = Moodle.merge(fast: MoodleSync(siteName: "X", subjects: [fastSubject], warnings: [], synced: b3Now), previous: [prevSubject]).subjects
+    check(mergedFast.count == 1 && mergedFast[0].assessments.map(\.id) == ["p1"]
+          && mergedFast[0].materials.map(\.title) == ["Slides"]
+          && mergedFast[0].assignments.map(\.title) == ["New task"]
+          && mergedFast[0].announcements.map(\.title) == ["New news", "Old news"]
+          && (mergedFast[0].events ?? []).map(\.title) == ["Quiz 2 on 5 Nov", "Exam"],
+          "sync: a fast sync keeps the previous grades, materials and course-page dates, and takes the new assignments and news")
+    let generalPrev = Subject(id: "general", name: "General", code: "GENERAL", hue: .slate, assessments: [], assignments: [],
+                              materials: [], announcements: [],
+                              events: [CourseEvent(title: "Holiday", date: b3Now, source: .document,
+                                                   detail: "On the course page: Holiday", via: .coursePage)])
+    let generalMerged = Moodle.merge(fast: MoodleSync(siteName: "X", subjects: [], warnings: [], synced: b3Now), previous: [generalPrev]).subjects
+    check(generalMerged.count == 1 && generalMerged[0].id == "general" && generalMerged[0].events?.map(\.title) == ["Holiday"],
+          "sync: a General course made of course-page dates survives a fast sync that doesn't see it")
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.
