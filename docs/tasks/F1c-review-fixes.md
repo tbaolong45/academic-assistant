@@ -12,6 +12,10 @@ Queued right after B2. Sources: `docs/reviews/P2.md`, `docs/reviews/F1b.md`.
 | 4 | F1b #1/#2 | Only one `fetchMail` at a time. A set-mail check while a sync is fetching mail waits for that fetch or reuses its result, so one blip can't double-count a UID. | Store.swift (+ ConnectView.swift if a button must disable) |
 | 5 | F1b #3 | A cancellation must never count as a failure. Map `CancellationError` to a distinct error, or check `Task.isCancelled` after the error too. | SchoolMail.swift |
 
+| 6 | U3 review #2 | `macos/Resources/Info.plist` `LSMinimumSystemVersion` 15.0 → 26.0, to match `Package.swift` `.macOS(.v26)`. | Resources/Info.plist |
+
+U3 review #3–#5 (TechBackground wrapper, light-mode leftovers, sidebar header style) go to U4/U5.
+
 P2 #3 (the init PDF scan delays the first sync) stays as built for now; the architect may revisit it with B7's parallelism.
 
 ## Test writer (SelfCheck.swift)

@@ -49,7 +49,7 @@ enum SchoolMail {
                 if let m = try await fetch(uid) { store.messages.append(m) } else { store.seen.insert(uid) }
                 store.failures[uid] = nil
             } catch {
-                if Task.isCancelled { break }
+                if Task.isCancelled || error is CancellationError { break } // a cancellation is never a failure
                 store.failures[uid, default: 0] += 1
                 if let e = error as? MailError, e == .timeout || e == .closed { save(store); break } // the rest stay uncounted
             }
@@ -425,6 +425,7 @@ actor IMAPConnection {
             return try await deadlineGroup(work)
         } catch {
             dead = true
+            if Task.isCancelled || error is CancellationError { throw CancellationError() } // kept apart from a lost connection
             throw error is MailError ? error : MailError.closed // a transport error is a lost connection too
         }
     }

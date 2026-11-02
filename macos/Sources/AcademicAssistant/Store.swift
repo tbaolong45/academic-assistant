@@ -37,6 +37,8 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     @Published private(set) var classifierNote: String? // progress or the last classifier error (never the key)
     private var known = KindCache.load() // Jev answers by text hash
     private var classifying = false
+    private var classifyTask: Task<Void, Never>?, summarizeTask: Task<Void, Never>? // cancelled by disconnect
+    private var mailFetch: Task<MailStore?, Never>? // the one mail fetch running: a second caller waits for it
     @Published private(set) var hasDeepSeekKey = Keychain.read(host: DeepSeek.account) != nil
     @Published private(set) var summaryNote: String?
     @Published private(set) var hasOutlookLink = Keychain.read(host: OutlookCalendar.account) != nil
@@ -56,9 +58,10 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         guard MoodleAccount.credentials() != nil else { return }
         Notifier.requestPermission()
         isConnected = true
-        if let cache = MoodleCache.load() { use(cache); publish() }
+        let cache = MoodleCache.load()
+        if let cache { use(cache); publish() }
         board = boardItems(subjects) // didSet doesn't run for assignments made directly in init
-        startAutoSync(scanFirst: true)
+        startAutoSync(scanFirst: cache != nil) // no cache = sample data on screen: nothing to scan or send to Jev
     }
 
     static func isCurrent(generation: Int, current: Int) -> Bool { generation == current }
@@ -102,10 +105,10 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     /// that follow publish once more.
     func sync() async {
         guard !syncing, let creds = MoodleAccount.credentials() else { return }
-        syncing = true
-        defer { syncing = false }
         generation += 1
         let gen = generation
+        syncing = true
+        defer { if Self.isCurrent(generation: gen, current: generation) { syncing = false } } // disconnect already reset it
         async let outlook = fetchOutlook()
         async let newMail = fetchMail()
         let moodle: Result<MoodleSync, Error>
@@ -152,20 +155,23 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
 
     /// Sends every announcement and dated item Jev hasn't seen yet (text only), then labels them.
     private func classify() {
-        guard !classifying, hasJevKey, let key = Keychain.read(host: Jev.account) else { return }
+        guard isConnected, lastSynced != nil, !classifying, hasJevKey, let key = Keychain.read(host: Jev.account) else { return } // never sample data
         let texts = Set(subjects.flatMap { s in s.announcements.map(\.classifyText) + (s.events ?? []).map(\.classifyText) })
             .filter { known[Jev.id($0)] == nil }
         guard !texts.isEmpty else { return }
         classifying = true
-        Task {
+        let gen = generation
+        classifyTask = Task {
             defer { classifying = false }
             var done = 0, failure: String?
-            for text in texts.prefix(300) { // ponytail: one at a time, 300 per sync; parallelise if the first run feels slow
+            for text in texts.prefix(300) where !Task.isCancelled { // ponytail: one at a time, 300 per sync; parallelise if the first run feels slow
                 classifierNote = "classifying \(done + 1) of \(min(texts.count, 300))…"
                 do { known[Jev.id(text)] = try await Jev.classify(text, key: key); done += 1 }
                 catch { failure = error.localizedDescription; break }
             }
-            save { try KindCache.save(known) }
+            save { try KindCache.save(known) } // labels are keyed by text, so keeping them is always safe
+            // A newer sync or a disconnect happened meanwhile: don't publish into it (the next publish picks the labels up).
+            guard Self.isCurrent(generation: gen, current: generation), !Task.isCancelled else { return }
             publish()
             classifierNote = failure.map { "stopped after \(done): \($0)" } ?? "\(known.count) items classified"
             summarize() // board items are known now
@@ -174,7 +180,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
 
     /// Titles for dated items on the board from a week ago to 4 months ahead: Jev picks the parts, DeepSeek writes, Jev checks.
     private func summarize() {
-        guard isConnected, !summarizing, !classifying, let jev = Keychain.read(host: Jev.account), let ds = Keychain.read(host: DeepSeek.account) else { return }
+        guard isConnected, lastSynced != nil, !summarizing, !classifying, let jev = Keychain.read(host: Jev.account), let ds = Keychain.read(host: DeepSeek.account) else { return }
         let window = Date.now.addingTimeInterval(-7 * 86_400)...Date.now.addingTimeInterval(120 * 86_400)
         var seen = Set<String>()
         let todo = subjects.flatMap { s in (s.events ?? []).map { (course: s.name, event: $0) } }
@@ -182,10 +188,11 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
                 && seen.insert(Summarizer.id($0.event)).inserted }
         guard !todo.isEmpty else { return }
         summarizing = true
-        Task {
+        let gen = generation
+        summarizeTask = Task {
             defer { summarizing = false }
             var done = 0, rejected = 0, failure: String?
-            for (course, e) in todo.prefix(80) { // ponytail: 80 items (≈240 calls) per sync, one at a time
+            for (course, e) in todo.prefix(80) where !Task.isCancelled { // ponytail: 80 items (≈240 calls) per sync, one at a time
                 summaryNote = "summarizing \(done + 1) of \(min(todo.count, 80))…"
                 do {
                     let s = try await Summarizer.summarize(e, course: course, jevKey: jev, deepSeekKey: ds)
@@ -194,6 +201,12 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
                     done += 1
                     if done % 10 == 0 { save { try SummaryCache.save(titles) } }
                 } catch { failure = error.localizedDescription; break }
+            }
+            // Prune only against the subjects this run started from: after a disconnect `subjects` is sample data, and
+            // pruning against it would delete every paid title. Unpruned titles are still saved.
+            guard Self.isCurrent(generation: gen, current: generation), !Task.isCancelled else {
+                save { try SummaryCache.save(titles) }
+                return
             }
             titles = Summarizer.prune(titles, to: subjects) // `subjects` is always a full publish, never a partial one
             save { try SummaryCache.save(titles) }
@@ -219,6 +232,14 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     /// School mail forwarded to Gmail: new messages from the last 60 days are downloaded once (by UID) and notified.
     /// nil when no Gmail login is set or the session failed (the last mail stays).
     private func fetchMail() async -> MailStore? {
+        if let running = mailFetch { return await running.value } // e.g. a set-mail check during a sync's fetch: one session only
+        let task = Task { await fetchMailNow() }
+        mailFetch = task
+        defer { mailFetch = nil }
+        return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
+    private func fetchMailNow() async -> MailStore? {
         guard let saved = Keychain.read(host: SchoolMail.account)?.split(separator: "\n", maxSplits: 1), saved.count == 2 else { return nil }
         let (address, password) = (String(saved[0]), String(saved[1]))
         let since = Date.now.addingTimeInterval(-60 * 86_400)
@@ -350,6 +371,13 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         autoSync = nil
         syncTask?.cancel()
         syncTask = nil
+        classifyTask?.cancel()
+        summarizeTask?.cancel()
+        syncing = false // a cancelled sync can't leave "Syncing…" up or Sync now disabled
+        downloading = false
+        mailNote = nil
+        outlookNote = nil
+        downloadNote = nil
         base = []
         docs = [:]
         if let s = MoodleAccount.site, let host = try? Moodle.siteURL(s).host() { Keychain.delete(host: host) }
