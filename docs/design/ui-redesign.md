@@ -271,6 +271,64 @@ Steps 1–3 are the same for every direction. Step 4 onwards depends on the pick
 4. `Hue.courseHues` doesn't contain `.blue`, and `courseHues.count == 5` with no repeats.
 5. An old cache whose subject has `"hue":"blue"` still decodes.
 
+### 6.1 U1c: brighter dark appearance (proposed 2026-11-02, waiting for the user)
+
+The user asked for more energy and contrast in dark mode. This step changes **dark values only** in `Theme.swift`; light stays as approved. The architect checked every value with the dataviz validator (`validate`, `validateOrdinal`, WCAG contrast).
+
+**At a glance (dark):**
+
+| Token | Before | After | What changes |
+|---|---|---|---|
+| bg | `#0f141c` | `#060c18` | deeper navy page |
+| surface (cards) | `#171d27` | `#141b2c` | lightness steps between bg, surface and raised nearly double (OKLCH ΔL 0.04 → 0.07), so cards stand off the page |
+| raised | `#1f2733` | `#222c41` | |
+| line | `#2b3442` | `#394459` | hairlines visible (1.35 → 1.75:1, still decorative) |
+| text | `#e8edf5` | `#f4f7fc` | 14.4 → 16.0:1 on cards |
+| text2 | `#a9b4c4` | `#cad3e4` | 8.1 → 11.4:1 |
+| text3 | `#8d99ab` | `#a6b0c3` | 5.9 → 7.9:1 |
+| accent (fills) | `#2f6fe4` | `#3d89ff` | brighter blue. **Labels on it become dark** (`onAccent`), see below |
+| onAccent | `#ffffff` | `#081123` | 4.65 → 5.58:1 |
+| accentInk (blue text) | `#7eaaff` | `#7db3ff` | lighter at about the same saturation (sRGB has no more chroma at that lightness) |
+| accentSoft | `#1a2a47` | `#1a3467` | bluer selection wash |
+| good / warning / critical | `#0ca30c` / `#fab219` / `#d03b3b` | `#49df6e` / `#ffc347` / `#fe726e` | all ≥ 5.2:1 on surface and raised (critical was 3.5, good 4.5 on raised) |
+| course marks | `#057c59` `#a24e04` `#b48c05` `#d4679f` `#7750b1` | `#009068` `#c14802` `#b48c05` `#e4569e` `#914ad0` | more saturated; yellow was already at the top of the band |
+
+**Why labels on blue go dark:** white text needs a blue at or below the current lightness. A brighter fill with white labels would fall to 3.4:1. Dark labels on a bright fill are the usual dark-mode pattern (Material 3 does the same).
+- No view draws text on `accent` yet, and there are no `.borderedProminent` buttons.
+- Rule for U4/U5: a prominent button uses a custom style with `onAccent`. A system prominent button would draw white on the tint.
+
+**Course colours (dark):**
+
+| Hue | Ramp, band 0 → 3 | Mark | Wash |
+|---|---|---|---|
+| green | `#047554` `#089e72` `#05c992` `#77efbf` | `#009068` | `#063223` |
+| orange | `#9a4825` `#d55c27` `#ff8350` `#fec5b0` | `#c14802` | `#412013` |
+| yellow | `#7b5f01` `#a58108` `#d2a402` `#f8cf68` | `#b48c05` | `#352803` |
+| magenta | `#95426a` `#cd5590` `#ff72b7` `#ffbfda` | `#e4569e` | `#3e1e2d` |
+| violet | `#734f99` `#9e68d5` `#c48cfe` `#e0c8fe` | `#914ad0` | `#302340` |
+| slate | `#596475` `#7b8799` `#9facbe` `#c8d5e8` | `#9facbe` | `#242c38` |
+
+Ramps run OKLCH L 0.50 / 0.62 / 0.74 / 0.87 (they were about 0.44–0.80), with chroma up to 0.185.
+
+**Validation (dark, against the new surface `#141b2c`):**
+- **Text:** every text pair ≥ 4.5:1. The worst is onAccent on accent at 5.58 (it was 4.65).
+- **Ramps:** all six pass `validateOrdinal`; band 0 is ≥ 2.67:1 on surface.
+- **Washes:** text3 is ≥ 6.45:1 on every wash.
+- **Marks:** the five course marks pass `validate` (adjacent pairs).
+- **Blue against the marks:** `accent` plus the five marks pass `validate` with `pairs: "all"`. This fixes an old miss: violet `#7750b1` and the old accent were ΔE 12.7, below the 15 floor.
+- **Not checked as series:** `accentInk` and the status colours are UI colours, not data series, so the categorical lightness band doesn't apply to them.
+- **Status, red vs green:** good and critical can't be told apart under red-green colour blindness (deutan ΔE 3.8; it was 4.1). That's why status always ships with an icon and a label (rule in `Theme.swift`).
+- **Light mode:** unchanged, so its checks still hold.
+
+**Builder (Theme.swift only):** replace the dark half of each `Palette` token and each `Hue.palette` entry with the values above. Leave `.blue`'s legacy ramp as it is.
+
+**Test writer (SelfCheck.swift, palette block):**
+- (a) Add these dark text pairs to `textPairs`: `accentInk on raised`, `good on surface`, `warning on surface`, `critical on surface`, `good on raised`, `critical on raised`. All ≥ 4.5 in dark; light stays as it is.
+- (b) Dark surface separation: `contrast(surface, bg) ≥ 1.12` and `contrast(raised, surface) ≥ 1.2` (new 1.14 and 1.23; old 1.09 and 1.13, so this fails on the old values).
+- (c) Non-text: `contrast(accent, surface) ≥ 3` in both appearances (dark 5.09).
+- (d) Each wash: `text3` on `wash` ≥ 4.5 in both appearances.
+- (e) The existing ramp checks (monotone, band 0 ≥ 2:1) stay as they are.
+
 ## 7. Decisions (accepted by the user on 2026-11-02, relayed by the coordinator)
 
 - **D1:** direction **A "Campus"**. Use the A columns of §4. B and C are dropped.
@@ -288,6 +346,7 @@ The builder takes these one at a time, top to bottom. After each step the test w
 | 2 | **P1** Gmail: `BODY.PEEK[]` with a 256 KB partial fetch (proposal 1) | SchoolMail | none; first, because it changes the user's real mail now |
 | 3 | **P4** mail progress: save per message, remember failed and unparseable UIDs (proposal 4) | Store (`addSchoolMail`), SchoolMail (`MailCache`) | SchoolMail with P1, Store with B1 |
 | 4 | **P2** one publish per sync (proposal 2): sources fetched concurrently, a pure `normalize` assembles the subjects, `Store` publishes once | Store, Model | Store with B1 and P4; extends B1 |
+| 4a | **U1c** brighter dark appearance (§6.1), **after the user approves the look** | Theme, SelfCheck | none (the builder is past Theme.swift) |
 | 5 | **U1** Campus tokens, new course hues, `Tech` alias | Theme | none |
 | 6 | **U2** Effects, **including proposal 5**: `TechBackground` deleted, no endless animation left | Effects | none |
 | 7 | **U3** App shell, system appearance, macOS 26 target | App, Package.swift | App with B1 |

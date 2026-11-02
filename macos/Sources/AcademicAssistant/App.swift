@@ -36,9 +36,7 @@ struct AcademicAssistantApp: App {
                 .environmentObject(nav)
                 .environmentObject(store)
                 .frame(minWidth: 640, minHeight: 480)
-                .preferredColorScheme(.dark)
-                .fontDesign(.monospaced)
-                .tint(Tech.neon)
+                .tint(Palette.accent.color) // light or dark follows the system
         }
         .defaultSize(width: 1120, height: 760)
         .windowResizability(.contentMinSize)
@@ -90,46 +88,43 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            // Rows are buttons with our own neon highlight: List(selection:) forces the system blue accent.
+            // Rows are buttons with our own highlight: List(selection:) follows the user's system accent, the brand blue must not.
             List {
                 sidebarRow(.overview, index: 0) {
-                    Image(systemName: "square.grid.2x2").foregroundStyle(Tech.neon)
+                    Image(systemName: "square.grid.2x2")
                     Text("Overview")
                 }
                 sidebarRow(.week, index: 1) {
-                    Image(systemName: "calendar.day.timeline.left").foregroundStyle(Tech.neon)
+                    Image(systemName: "calendar.day.timeline.left")
                     Text("Deadlines")
                     Spacer(minLength: 4)
                     let monday = weekStart(of: .now)
-                    Text("\(store.board.between(monday, monday.addingTimeInterval(7 * 86_400)).count)").foregroundStyle(Tech.text2).monospacedDigit()
+                    Text("\(store.board.between(monday, monday.addingTimeInterval(7 * 86_400)).count)").foregroundStyle(Palette.text2.color).monospacedDigit()
                 }
                 sidebarRow(.calendar, index: 2) {
-                    Image(systemName: "calendar").foregroundStyle(Tech.neon)
+                    Image(systemName: "calendar")
                     Text("Calendar")
                     Spacer(minLength: 4)
                     let today = OutlookCalendar.occurrences(store.calendarItems, from: Calendar.current.startOfDay(for: .now),
                                                             to: Calendar.current.startOfDay(for: .now).addingTimeInterval(86_400)).count
-                    Text(store.calendarItems.isEmpty ? "—" : "\(today) today").foregroundStyle(Tech.text2).monospacedDigit()
+                    Text(store.calendarItems.isEmpty ? "—" : "\(today) today").foregroundStyle(Palette.text2.color).monospacedDigit()
                 }
                 Section {
                     ForEach(Array(store.subjects.enumerated()), id: \.element.id) { i, s in
                         sidebarRow(.course(s.id), index: i + 3) {
                             Circle().fill(s.hue.palette.accent).frame(width: 8, height: 8)
-                                .shadow(color: s.hue.palette.accent, radius: 4)
                             Text(s.name).lineLimit(1)
                             Spacer(minLength: 4)
                             Text(s.runningGrade.map { String(format: "%.1f", $0) } ?? "—")
-                                .foregroundStyle(Tech.text2).monospacedDigit()
+                                .foregroundStyle(Palette.text2.color).monospacedDigit()
                         }
                     }
                 } header: {
-                    Text("COURSES").font(.caption2.weight(.semibold)).tracking(1.6).foregroundStyle(Tech.text3)
+                    Text("Courses")
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Tech.panel)
-            .safeAreaInset(edge: .bottom) { SyncFooter { showConnect = true } }
-            .navigationSplitViewColumnWidth(min: 280, ideal: 290, max: 360) // monospaced names need the room
+            .safeAreaInset(edge: .bottom) { SyncFooter { showConnect = true } } // native sidebar material (glass on macOS 26)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
         } detail: {
             ZStack {
                 TechBackground()
@@ -154,20 +149,16 @@ struct RootView: View {
     private func sidebarRow(_ route: Route, index: Int, @ViewBuilder content: () -> some View) -> some View {
         let selected = nav.selection == route
         return Button { nav.go(route) } label: {
+            // Selected: an accentSoft pill with accentInk icon and text; blue nowhere else.
             HStack(spacing: 8) { content() }
+                .foregroundStyle(selected ? Palette.accentInk.color : Palette.text.color)
+                .fontWeight(selected ? .semibold : .regular)
                 .padding(.vertical, 6)
                 .padding(.horizontal, 10)
-                .offset(x: hovered == route && !selected ? 3 : 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background {
                     RoundedRectangle(cornerRadius: 7)
-                        .fill(selected ? Tech.neon.opacity(0.12) : hovered == route ? Tech.panelHi : .clear)
-                        .overlay(alignment: .leading) {
-                            if selected {
-                                Capsule().fill(Tech.neon).frame(width: 3).padding(.vertical, 6)
-                                    .shadow(color: Tech.neon, radius: 6)
-                            }
-                        }
+                        .fill(selected ? Palette.accentSoft.color : hovered == route ? Palette.raised.color.opacity(0.7) : .clear)
                 }
                 .contentShape(Rectangle())
         }

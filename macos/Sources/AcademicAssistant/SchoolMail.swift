@@ -39,18 +39,19 @@ enum SchoolMail {
     }
 
     /// Downloads `uids` one by one and saves after each, so one slow or broken mail can't stall the rest or lose what
-    /// came before it. A dead connection or a cancelled task stops the run without counting failures (next sync retries).
+    /// came before it. A lost connection (timeout or close) counts one failure for the mail in flight, so a mail that always
+    /// kills the connection is skipped after 3 syncs instead of blocking later mail, then stops the run. A cancelled task
+    /// stops it without counting anything.
     static func download(_ uids: [Int], into store: inout MailStore, fetch: (Int) async throws -> Message?,
                          save: (MailStore) -> Void) async {
         for uid in uids {
             do {
                 if let m = try await fetch(uid) { store.messages.append(m) } else { store.seen.insert(uid) }
                 store.failures[uid] = nil
-            } catch MailError.closed {
-                break
             } catch {
                 if Task.isCancelled { break }
                 store.failures[uid, default: 0] += 1
+                if let e = error as? MailError, e == .timeout || e == .closed { save(store); break } // the rest stay uncounted
             }
             save(store)
         }
@@ -269,7 +270,7 @@ enum MailCache {
 }
 
 enum MailError: LocalizedError, Equatable {
-    case badCredential, badLogin, server(String), timeout, closed
+    case badCredential, badLogin, server(String), timeout, closed, busy
     var errorDescription: String? {
         switch self {
         case .badCredential: "The address or app password is empty or contains a control character"
@@ -277,6 +278,7 @@ enum MailError: LocalizedError, Equatable {
         case .server(let word): "Gmail refused a request (\(word))"
         case .timeout: "Gmail didn't answer within 30 seconds"
         case .closed: "Gmail closed the connection"
+        case .busy: "The mail connection was already running a command"
         }
     }
 }
@@ -326,7 +328,7 @@ actor IMAPConnection {
 
     func open(address: String, password: String) async throws {
         guard SchoolMail.isSafeCredential(address) && SchoolMail.isSafeCredential(password) else { throw MailError.badCredential }
-        guard !busy else { throw MailError.server("busy") }
+        guard !busy else { throw MailError.busy }
         busy = true
         defer { busy = false }
         connection.start(queue: .global())
@@ -345,7 +347,7 @@ actor IMAPConnection {
 
     @discardableResult func command(_ text: String) async throws -> Data {
         guard !dead else { throw MailError.closed }
-        guard !busy else { throw MailError.server("busy") }
+        guard !busy else { throw MailError.busy }
         busy = true
         defer { busy = false }
         count += 1
@@ -423,7 +425,7 @@ actor IMAPConnection {
             return try await deadlineGroup(work)
         } catch {
             dead = true
-            throw error
+            throw error is MailError ? error : MailError.closed // a transport error is a lost connection too
         }
     }
 

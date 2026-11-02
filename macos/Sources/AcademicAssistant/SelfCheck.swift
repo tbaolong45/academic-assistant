@@ -450,7 +450,7 @@ func runSelfCheck() -> Never {
     check(early == nil && complete != nil && SchoolMail.literal(complete!) == Data(literalBody.utf8),
           "mail: bytes fed in two chunks give nil until the tagged line arrives, then the whole response")
     // F1 / P1 #2: every byte offset, not just one lucky split.
-    var splitOK = true, splitAt = 0
+    var splitOK = true, splitAt: Int? = nil
     for cut in 1..<whole.count {
         var r = IMAPReader()
         r.feed(whole.prefix(cut))
@@ -460,7 +460,8 @@ func runSelfCheck() -> Never {
             splitOK = false; splitAt = cut; break
         }
     }
-    check(splitOK, "mail: a reply split at every byte offset is nil until complete, then the same literal (failed at \(splitAt))")
+    check(splitOK, "mail: a reply split at every byte offset is nil until complete, then the same literal"
+          + (splitAt.map { " (failed at \($0))" } ?? ""))
     func mailError(_ response: String, login: Bool) -> MailError? {
         do { try SchoolMail.status(Data(response.utf8), tag: "A3", login: login); return nil }
         catch { return error as? MailError }
@@ -482,9 +483,14 @@ func runSelfCheck() -> Never {
     let spacedPhone = scrubPersonal("Call 050 - 123 - 4567")
     check(spacedPhone.contains("[phone]") && !spacedPhone.contains(where: \.isNumber),
           "scrub: '050 - 123 - 4567' (3-character separator runs) becomes [phone] (got \(spacedPhone))")
+    let plainSpacedPhone = scrubPersonal("Call 050 123 4567")
+    check(plainSpacedPhone.contains("[phone]") && !plainSpacedPhone.contains(where: \.isNumber),
+          "scrub: '050 123 4567' is still scrubbed (got \(plainSpacedPhone))")
     let dottedRange = "23.10.2026-25.10.2026", dottedTime = "23.10.2026 10.00"
     check(scrubPersonal(dottedRange) == dottedRange && scrubPersonal(dottedTime) == dottedTime,
           "scrub: dotted dates ('23.10.2026-25.10.2026', '23.10.2026 10.00') are not phone numbers")
+    let shortDotted = "23.10.26 10.00"
+    check(scrubPersonal(shortDotted) == shortDotted, "scrub: a two-digit-year dotted date ('23.10.26 10.00') is not a phone number")
     let crlfSig = scrubPersonal("Submit.\r\n\r\nBest regards,\r\nDr. Jane Doe")
     check(crlfSig.contains("Submit.") && !crlfSig.contains("Jane"),
           "scrub: a CRLF signature block is cut too (got \(crlfSig))")
@@ -536,6 +542,9 @@ func runSelfCheck() -> Never {
     check(dupBoard.count == 1 && Set(dupBoard.map(\.id)).count == dupBoard.count && dupBoard.first?.detail == "a",
           "board: items sharing an id are collapsed, the first one kept (got \(dupBoard.count) items)")
 
+    // F1 #7: F1 items 2–3 (the isSafeCredential guard inside IMAPConnection.open, and one command at a time on an
+    // IMAPConnection) cannot be checked here: they need a live IMAP connection. They are covered by review only.
+
     // MARK: - Mail progress (P4)
 
     let oldMail = #"[{"uid":1,"subject":"S","from":"F","date":0,"body":"B"}]"#
@@ -555,11 +564,11 @@ func runSelfCheck() -> Never {
     }
     let failedDownload = MailBox()
     runDownload(failedDownload) { uid in
-        if uid == 3 { throw MailError.timeout }
+        if uid == 3 { throw MailError.server("NO") } // a per-message failure, not a lost connection
         return SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
     }
-    check(failedDownload.store.messages.map(\.uid) == [1, 2, 4, 5] && failedDownload.store.failures[3] == 1 && failedDownload.saves == 5,
-          "mail: a failing fetch is counted and saved, and doesn't stop the run (got \(failedDownload.store.messages.map(\.uid)))")
+    check(failedDownload.store.messages.map(\.uid) == [1, 2, 4, 5] && failedDownload.store.failures == [3: 1] && failedDownload.saves == 5,
+          "mail: a per-message failure is counted and saved, and doesn't stop the run (got \(failedDownload.store.messages.map(\.uid)), \(failedDownload.store.failures))")
     let unreadableMail = MailBox()
     runDownload(unreadableMail) { uid in
         uid == 2 ? nil : SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
@@ -571,13 +580,24 @@ func runSelfCheck() -> Never {
         if uid == 2 { throw MailError.closed }
         return SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
     }
-    check(closedDownload.store.messages.map(\.uid) == [1] && closedDownload.store.failures.isEmpty && closedDownload.saves == 1,
-          "mail: a closed connection stops the run without counting a failure (got \(closedDownload.store.messages.map(\.uid)))")
+    check(closedDownload.store.messages.map(\.uid) == [1] && closedDownload.store.failures == [2: 1] && closedDownload.saves == 2,
+          "mail: a lost connection counts one failure for the mail in flight, saves, then stops (got \(closedDownload.store.failures))")
+    let dyingDownload = MailBox()
+    runDownload(dyingDownload) { uid in
+        if uid == 3 { throw MailError.timeout }
+        if uid >= 4 { throw MailError.closed }
+        return SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
+    }
+    check(dyingDownload.store.messages.map(\.uid) == [1, 2] && dyingDownload.store.failures == [3: 1] && dyingDownload.saves == 3,
+          "mail: a timeout counts one failure, a later closed connection stops the run, and 4–5 stay uncounted")
     let someMail = SchoolMail.Message(uid: 1, subject: "S", from: "F", date: .now, body: "B")
     let unreadableNote = MailStore(messages: Array(repeating: someMail, count: 49), seen: [7])
     let cleanNote = MailStore(messages: Array(repeating: someMail, count: 49))
     check(unreadableNote.note == "49 school emails · 1 skipped (unreadable date)" && cleanNote.note == "49 school emails",
           "mail: the note counts skipped-unreadable mail, and has no '·' part when nothing was skipped (got \(unreadableNote.note))")
+    let roundTrip = MailStore(messages: [someMail], seen: [9], failures: [4: 2])
+    check((try? JSONDecoder().decode(MailStore.self, from: JSONEncoder().encode(roundTrip))) == roundTrip,
+          "mail: MailStore survives an encode → decode round-trip (messages, seen and failures)")
 
     // MARK: - One publish per sync (P2)
 

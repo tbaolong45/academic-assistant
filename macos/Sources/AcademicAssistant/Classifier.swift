@@ -145,8 +145,8 @@ func scrubPersonal(_ raw: String) -> String {
         out = String(out.reversed().drop { $0.isWhitespace }.reversed())
     }
     out = out.replacingOccurrences(of: #"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"#, with: "[email]", options: .regularExpression)
-    // Dotted dates (23.10.2026) are set aside first, so a range or a date with a time can't add up to 9 digits.
-    let dateRE = try! NSRegularExpression(pattern: #"(?<![\d.])(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.(?:19|20)\d\d(?![\d])"#)
+    // Dotted dates (23.10.2026, 23.10.26) are set aside first, so a range or a date with a time can't add up to 9 digits.
+    let dateRE = try! NSRegularExpression(pattern: #"(?<![\d.])(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.(?:(?:19|20)\d\d|\d\d)(?![\d])"#)
     var dates: [String] = []
     for m in dateRE.matches(in: out, range: NSRange(out.startIndex..., in: out)).reversed() {
         guard let r = Range(m.range, in: out) else { continue }

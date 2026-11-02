@@ -122,7 +122,7 @@ struct HomeView: View {
         let on = hovered == item.id
         let text = VStack(alignment: .leading, spacing: 2) {
             Text(s.name).font(.caption).foregroundStyle(Tech.text2)
-            Text(item.label).fontWeight(.semibold).foregroundStyle(Tech.text) + Text(type).foregroundStyle(Tech.text2)
+            Text("\(Text(item.label).fontWeight(.semibold).foregroundStyle(Tech.text))\(Text(type).foregroundStyle(Tech.text2))")
             Text(when).font(.caption).foregroundStyle(Tech.text3)
         }
         // Only graded work shows a weight; events (talks, office hours, class changes) just say what they are.

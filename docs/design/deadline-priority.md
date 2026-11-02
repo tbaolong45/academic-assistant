@@ -117,7 +117,7 @@ TED Script, as of Wed 28 Oct 09:00 (due Sun 1 Nov 23:59, so 4.6 days left; 8% fr
 
 ### 2.1 Origin (finer than today's `CourseEvent.Source`)
 
-Today mail, messages and news are all `.announcement`, and course-page text and PDFs are both `.document` (told apart only by the `detail` prefix "On the course page"). Add `enum Origin` and set it where events are made:
+Today mail, messages and news are all `.announcement`, and course-page text and PDFs are both `.document` (told apart only by the `detail` prefix "On the course page"). Add `enum Origin` and set it where events are made. The field is called **`via`**: `CourseEvent` already has `origin: String?`, the summarizer's source text, which `Summarizer.id` hashes, so renaming it would re-bill every AI title.
 
 | Rank (high wins) | Origin | Made in |
 |---|---|---|
@@ -131,7 +131,11 @@ Today mail, messages and news are all `.announcement`, and course-page text and 
 
 - Syllabus placeholders rank below course pages. They are typed in from a tentative schedule, and a real Moodle item already replaces them by name.
 - New `CourseEvent` fields, **all optional** so the existing `moodle-cache.json` still decodes (a non-optional field would make the app open on sample data):
-  - `origin: Origin?`
+  - `via: Origin?` (on `CourseEvent` and `Deadline`). Old cached events have no `via`, so all code reads the computed `resolvedVia`:
+    - `via` when it's set;
+    - otherwise `.calendar` → `moodleCalendar`, `.outlook` → `outlookCalendar`, `.announcement` → `news`, and `.document` → `coursePage` when `detail` starts with "On the course page", else `pdf`.
+    - `.announcement` → `news` is only approximately right: old mail and message events also map to it. That's harmless. All three share one rank, B5's marks don't exist yet, and every event gets its real `via` at the first sync after the upgrade.
+    - F1's `isPDFDate` becomes `resolvedVia == .pdf`.
   - `posted: Date?` (the post or mail date)
   - `moved: Bool?` (see 2.3)
   - `ref: String?` (stable source id: Moodle calendar event `id`, ICS `UID`, file url, material title)
@@ -162,7 +166,7 @@ TED example: "TED-Talk Script (8%)" gives {ted, talk, script}. "TED Script due 1
 
 ### 2.4 Which member shows, and with what date
 
-- **Winner (title, kind, click target):** highest origin rank, then the newest `posted`.
+- **Winner (title, kind, click target):** highest `resolvedVia` rank, then the newest `posted`.
 - **Date:**
   - If the winner is a Moodle activity, use the Moodle (effective, **[T4]**) date. If a newer `moved` post disagrees by more than 12 h, the card shows a note: "⚠ post on Thu 29 Oct says moved to Sun 1 Nov". Moodle is where the work is submitted, so its date is not silently overridden (**D3**).
   - Otherwise, if any member is `moved`, use the date of the newest-posted `moved` member.
@@ -184,7 +188,7 @@ The notification rule is unchanged: notifications are never a date source.
 | Graded assessment / syllabus placeholder | `g:<subject>/<assessment.id>` (already stable: `<course>-gi<id>`, `syllabus/AI1110/Quiz 4`) |
 | Moodle calendar event | `c:<event id>` |
 | Outlook event | `o:<UID>` |
-| Text item (news, message, mail, course page, PDF) | `t:<subject>/<origin>/<ref or announcement key>/<sorted keywords>/<n>`, where n = the ordinal among same-keyword dates in that one source |
+| Text item (news, message, mail, course page, PDF) | `t:<subject>/<resolvedVia>/<ref or announcement key>/<sorted keywords>/<n>`, where n = the ordinal among same-keyword dates in that one source |
 
 A **cluster's** identity is the set of its member keys. A mark applies to a cluster if any member key is marked. A new post that moves a date joins the cluster (§2.2), so it inherits the mark.
 
@@ -322,7 +326,7 @@ Each builder task is one reviewable diff. After each one, the test writer adds t
 | # | Builder task | Files | Reuse | Test-writer checks (exact cases) |
 |---|---|---|---|---|
 | B1 | Board computed once + static regexes (behaviour-preserving) | Model.swift (`BoardItem`, `boardItems`), Store.swift, WeekView.swift, HomeView.swift, App.swift, Moodle.swift | `deadlines()` logic as-is | (a) For the sample `Subject.all`, `boardItems` sliced to [now, now+7d) gives the same ids and order as today's `deadlines(…, days: 7)`. (b) `mentionedDates("Quiz on 3rd October", …)` gives the same result as before. |
-| B2 | Origin, identity and new optional fields | Model.swift, Moodle.swift (set origin/posted/ref, decode `Assign.id`, `CalendarEvent.id`), Outlook.swift, SchoolMail.swift, Materials.swift | | (a) A `moodle-cache.json` written before B2 (a fixture string without the new fields) still decodes. (b) `memberKey` of an event is unchanged when only its date changes. (c) Two dates with the same keywords in one post get keys `/0` and `/1`. |
+| B2 | Origin, identity and new optional fields | Model.swift, Moodle.swift (set via/posted/ref, decode `Assign.id`, `CalendarEvent.id`), Outlook.swift, SchoolMail.swift, Materials.swift | | (a) A `moodle-cache.json` written before B2 (a fixture string without the new fields) still decodes. (b) `memberKey` of an event is unchanged when only its date changes. (c) Two dates with the same keywords in one post get keys `/0` and `/1`. |
 | B3 | Ranking + reason + effective due date (§6) | Model.swift, Moodle.swift (decode `cutoffdate`, `extensionduedate`), WeekBoardParts.swift (chip second line, preview text), WeekView.swift (Do next uses `priority`, exams included, 28-day horizon) | `percentInTitle`, `Moodle.kind`, `share` | With H = 3, now fixed: (a) every row of the sample table in §1.5 (priority to 0.1). (b) Weight order: Moodle 12 beats a title "(8%)"; syllabus 7.5 beats the title; neither gives `~5`, estimate = true. (c) Spare quiz (`exactWeight` 0) → 7.5 with "if it counts". (d) Reason strings exactly as in §1.3 for: 12% in 2 days → "start today"; 8% in 4.6 days → "start by Sat 31 Oct" (now = 28 Oct 09:00, due 1 Nov 23:59); slack −1 → "behind by ~1 day". (e) 30% project in 10 days ranks above a "~5%" item due tomorrow. (f) Do next includes a 30% project due in 10 days (the 28-day horizon), and excludes an item due in 29 days. (g) Effective due date: `duedate` 1 Nov, `extensionduedate` 4 Nov → due 4 Nov, `extended`; `extensionduedate` 0 → 1 Nov; an extension *earlier* than `duedate` → `duedate` (max). (h) Cutoff: now = 2 Nov, due 1 Nov, cutoff 6 Nov → overdue, reason contains "late until Fri 6 Nov"; cutoff 1 Nov 12:00 → leaves Do next; cutoff 0 → stays as overdue. |
 | B4 | Cluster + supersede + move cue | Model.swift (`cluster`), Moodle.swift (`moved` in `mentionedDates`) | `keywords`, `mainPoint`, `sameItem` | (a) "TED-Talk Script (8%)" (Moodle, 1 Nov) + "TED Script due 1 Nov" (news) → 1 item, Moodle title. (b) "Quiz 3" + "Quiz 4" same day → 2 items. (c) "Assignment 1" vs "Assignment 10" → 2. (d) News on 20 Oct "Presentation on 27 Oct" + news on 25 Oct "Presentation moved to 3 Nov" → 1 item dated 3 Nov. (e) `mentionedDates("The quiz has been moved from 20 Oct to 1 Nov")` → one date, 1 Nov, `moved == true`. (f) Moodle assignment 1 Nov + newer post "extended to 4 Nov" → date stays 1 Nov, with the conflict note (if D3 holds). (g) Same keywords 10 days apart, no cue → 2 items. (h) A PDF line "Final Paper (14%)" gives weight 14 to a weightless Moodle "Final Paper" item. |
 | B5 | Done / dismiss / snooze | new `BoardState.swift` (Marks, load/save via `writeOwnerOnly`), Model.swift (apply marks), Store.swift, WeekBoardParts.swift (buttons, context menu) | `Jev.id` for hashing | (a) Dismiss, then the date moves 2 days → visible, tagged "date changed". (b) Done, then the date moves → still hidden. (c) Snooze until T → hidden before T, visible at T. (d) A mark on member A applies after member B (a moved post) joins the cluster. (e) The board-state file is 0600 and its folder 0700. (f) Pruning drops a mark 31 days past with no source, and keeps one at 29 days. |

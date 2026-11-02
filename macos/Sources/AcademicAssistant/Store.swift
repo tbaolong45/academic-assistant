@@ -224,20 +224,23 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         let since = Date.now.addingTimeInterval(-60 * 86_400)
         do {
             let start = mail
-            let updated = try await SchoolMail.session(address: address, password: password) { imap in // one login per sync
-                var store = start
+            let (updated, writeError) = try await SchoolMail.session(address: address, password: password) { imap in // one login per sync
+                var store = start, writeError: String?
                 let uids = try await imap.search(since: since)
                 store.prune(since: since, uids: Set(uids))
                 let todo = SchoolMail.toFetch(uids: uids, have: Set(store.messages.map(\.uid)), seen: store.seen, failures: store.failures)
                 // Saved after every message, so progress survives a stall or a quit (a write error shows after the loop).
                 await SchoolMail.download(Array(todo.suffix(200)), into: &store, fetch: { try await imap.message(uid: $0) },
-                                          save: { try? MailCache.save($0) })
-                return store
+                                          save: { s in
+                    do { try MailCache.save(s) } catch { writeError = writeError ?? error.localizedDescription } // the first one
+                })
+                return (store, writeError)
             }
             let known = Set(start.messages.map(\.uid))
             let fresh = updated.messages.filter { !known.contains($0.uid) }
             if !start.messages.isEmpty { Notifier.post(fresh.map { (title: "✉︎ \($0.from)", body: $0.subject) }) } // not on the first download
             save { try MailCache.save(updated) }
+            if cacheNote == nil, let writeError { cacheNote = "Local cache: \(writeError)" }
             mailNote = updated.note
             return updated
         } catch {
