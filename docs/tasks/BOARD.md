@@ -8,16 +8,17 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | T2 | Self-checks for T1 | Test writer (DeepSeek #1) | SelfCheck.swift | done (T2b origin-scrub check pending) |
 | T3 | Design: deadline priority, dedupe, done/snooze, filters, speed | Architect (Claude de) | docs/design/deadline-priority.md | done; user accepted D1–D7 (recommended) |
 | T4 | Research: effective due dates on Moodle 4.5; prioritisation heuristics | Researcher (Antigravity) | docs/research/T4-moodle-due-dates.md | done; folded into deadline-priority §6 |
-| R1 | Review T1 + T2 diff | Reviewer (DeepSeek #2) | none (read-only) | in review |
+| R1 | Review T1 + T2 diff | Reviewer (DeepSeek #2) | docs/reviews/R1.md | done → F1 |
 | T5 | UI redesign proposal: blue primary, modern, 3 directions | Architect | docs/design/ui-redesign.md | done; user chose A Campus, system light/dark, macOS 26, new course hues |
 | T6 | Backend audit, ≥3 pipeline options, ranked optimisations (each needs user approval) | Architect | docs/design/backend-review.md | done; user approved proposals 1–7 (8 after T4), 60-min slow tier OK |
 | T7 | Research: macOS 26 design guidance, student-app patterns, accessible blues | Researcher | none (reports in terminal) | assigned (after T4) |
-| R2 | Read-only backend fault hunt, feeds T6 | Reviewer | none (read-only) | assigned (after R1) |
+| R2 | Read-only backend fault hunt, feeds T6 | Reviewer | docs/reviews/R2.md | done; architect folding into backend-review §2.4 |
 | P0 | Remove personal emails before the public push (ConnectView default Gmail; SelfCheck school address) | Builder + Test writer | ConnectView.swift / SelfCheck.swift | done |
 | B1 | First build step of T3 (doc §7) | Builder + Test writer | per doc §7 | done |
 | U1 | Campus tokens + new course hues | Builder + Test writer | Theme.swift, Model.swift | done (checks pending) |
-| P1 | Gmail never marked read: built-in IMAP client | Builder | SchoolMail.swift | in progress |
-| G1 | Entire + GitHub: public code repo, private checkpoints repo | Coordinator | git config, .entire/ | waiting on `entire login` |
+| P1 | Gmail never marked read: built-in IMAP client | Builder | SchoolMail.swift | done; reviewed (docs/reviews/P1.md), 1 High → F1 |
+| F1 | Fixes from reviews R1, B1, P1 (11 items, incl. P1 send-hang High) | Builder + Test writer | see docs/tasks/F1-review-fixes.md | queued after U2, before P4 |
+| G1 | Entire + GitHub: public code repo, private checkpoints repo | Coordinator | git config, .entire/ | done: github.com/tbaolong45/academic-assistant (public), Entire mirror aws-ap-south-1 |
 
 Decisions from the user (2026-11-02):
 - Grade notifications must not show the score.
@@ -32,3 +33,4 @@ Decisions from the user (2026-11-02):
 - Build queue: docs/design/ui-redesign.md §8 (merged U/B/T6 steps), owned by the architect.
 - P8 (incremental sync): not built. core_course_get_updates_since misses manual grades, extensions and overrides, so it can't replace the refetches (T4 §3.3).
 - Reports: reviewer → docs/reviews/<ID>.md, researcher → docs/research/<ID>.md (report folders only, no code).
+- Git: only the coordinator commits and pushes, at green points (build-app.sh + self-check pass). Agents never commit, push or rewrite history.

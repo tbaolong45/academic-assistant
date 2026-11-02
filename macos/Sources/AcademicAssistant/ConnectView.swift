@@ -98,6 +98,7 @@ struct ConnectView: View {
         .padding(12)
         .techPanel()
 
+        if let note = store.cacheNote { Text("· \(note)").font(.caption).foregroundStyle(Tech.text2) }
         if !store.warnings.isEmpty {
             SectionLabel("skipped")
             ScrollView {

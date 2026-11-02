@@ -23,7 +23,7 @@ enum SchoolMail {
             await imap.close()
             return result
         } catch {
-            await imap.close()
+            imap.cancel() // no LOGOUT on a failed session: the stream may be stuck mid-command
             throw error
         }
     }
@@ -31,6 +31,29 @@ enum SchoolMail {
     /// Non-empty and free of control characters (`\0`, `\n`, `\r`, `\t`, …).
     static func isSafeCredential(_ s: String) -> Bool {
         !s.isEmpty && s.rangeOfCharacter(from: .controlCharacters) == nil
+    }
+
+    /// UIDs still to download: not stored, not seen-but-unparseable, and fewer than 3 failed fetches.
+    static func toFetch(uids: [Int], have: Set<Int>, seen: Set<Int>, failures: [Int: Int]) -> [Int] {
+        uids.filter { !have.contains($0) && !seen.contains($0) && failures[$0, default: 0] < 3 }
+    }
+
+    /// Downloads `uids` one by one and saves after each, so one slow or broken mail can't stall the rest or lose what
+    /// came before it. A dead connection or a cancelled task stops the run without counting failures (next sync retries).
+    static func download(_ uids: [Int], into store: inout MailStore, fetch: (Int) async throws -> Message?,
+                         save: (MailStore) -> Void) async {
+        for uid in uids {
+            do {
+                if let m = try await fetch(uid) { store.messages.append(m) } else { store.seen.insert(uid) }
+                store.failures[uid] = nil
+            } catch MailError.closed {
+                break
+            } catch {
+                if Task.isCancelled { break }
+                store.failures[uid, default: 0] += 1
+            }
+            save(store)
+        }
     }
 
     /// SASL PLAIN with the initial response: base64, so the password needs no IMAP quoting and never travels as plain text.
@@ -210,18 +233,43 @@ enum SchoolMail {
     }
 }
 
-/// Parsed messages by UID, so each email is downloaded once: ~/Library/Application Support/AcademicAssistant/mail.json (owner-only).
+/// Mail progress, so each email is downloaded once: parsed messages, UIDs fetched but unparseable, and failed fetches.
+struct MailStore: Codable, Sendable, Equatable {
+    var messages: [SchoolMail.Message] = []
+    var seen: Set<Int> = [] // fetched, but `parse` couldn't read it (no readable Date:): not fetched again
+    var failures: [Int: Int] = [:] // UID → failed fetches; skipped from the 3rd on
+
+    /// Keeps only what still matters: messages since `since`, and progress for UIDs the last search still returned.
+    mutating func prune(since: Date, uids: Set<Int>) {
+        messages = messages.filter { $0.date > since }
+        seen.formIntersection(uids)
+        failures = failures.filter { uids.contains($0.key) }
+    }
+}
+
+extension MailStore {
+    /// Before P4 mail.json was a plain array of messages; it still decodes, so 60 days of mail aren't downloaded again.
+    init(from decoder: Decoder) throws {
+        if let old = try? [SchoolMail.Message](from: decoder) { self.init(messages: old); return }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(messages: try c.decode([SchoolMail.Message].self, forKey: .messages),
+                  seen: try c.decodeIfPresent(Set<Int>.self, forKey: .seen) ?? [],
+                  failures: try c.decodeIfPresent([Int: Int].self, forKey: .failures) ?? [:])
+    }
+}
+
+/// ~/Library/Application Support/AcademicAssistant/mail.json (owner-only).
 enum MailCache {
     static let url = MoodleCache.url.deletingLastPathComponent().appending(path: "mail.json")
-    static func load() -> [SchoolMail.Message] { (try? JSONDecoder().decode([SchoolMail.Message].self, from: Data(contentsOf: url))) ?? [] }
-    static func save(_ all: [SchoolMail.Message]) { try? writeOwnerOnly(JSONEncoder().encode(all), to: url) }
+    static func load() -> MailStore { (try? JSONDecoder().decode(MailStore.self, from: Data(contentsOf: url))) ?? MailStore() }
+    static func save(_ store: MailStore) throws { try writeOwnerOnly(JSONEncoder().encode(store), to: url) }
 }
 
 enum MailError: LocalizedError, Equatable {
     case badCredential, badLogin, server(String), timeout, closed
     var errorDescription: String? {
         switch self {
-        case .badCredential: "The address or app password contains a line break or other control character"
+        case .badCredential: "The address or app password is empty or contains a control character"
         case .badLogin: "Gmail rejected the sign-in (check the address and app password)"
         case .server(let word): "Gmail refused a request (\(word))"
         case .timeout: "Gmail didn't answer within 30 seconds"
@@ -268,10 +316,16 @@ struct IMAPReader {
 actor IMAPConnection {
     private let connection: NWConnection
     private var reader = IMAPReader(), count = 0
+    private var busy = false // one command at a time: the actor is re-entrant at every await, replies would interleave
+    private var dead = false // after a timeout or transport error the stream can't be trusted: further commands throw .closed
 
     init(host: String) { connection = NWConnection(host: NWEndpoint.Host(host), port: 993, using: .tls) } // system trust checks
 
     func open(address: String, password: String) async throws {
+        guard SchoolMail.isSafeCredential(address) && SchoolMail.isSafeCredential(password) else { throw MailError.badCredential }
+        guard !busy else { throw MailError.server("busy") }
+        busy = true
+        defer { busy = false }
         connection.start(queue: .global())
         let greeting = try await deadline { try await self.read(tag: nil) }
         guard String(decoding: greeting.prefix(4), as: UTF8.self) == "* OK" else { throw MailError.server("greeting") }
@@ -282,10 +336,15 @@ actor IMAPConnection {
             return try await self.read(tag: tag)
         }
         try SchoolMail.status(reply, tag: tag, login: true)
+        busy = false
         try await command("EXAMINE \"[Gmail]/All Mail\"") // read-only: nothing in it can be marked read
     }
 
     @discardableResult func command(_ text: String) async throws -> Data {
+        guard !dead else { throw MailError.closed }
+        guard !busy else { throw MailError.server("busy") }
+        busy = true
+        defer { busy = false }
         count += 1
         let tag = "A\(count)"
         let reply = try await deadline {
@@ -308,20 +367,24 @@ actor IMAPConnection {
         SchoolMail.literal(try await command(SchoolMail.fetchCommand(uid: uid))).flatMap { SchoolMail.parse(String(decoding: $0, as: UTF8.self), uid: uid) }
     }
 
-    /// The UIDs among `uids` that are still unread (for `--mail-check`).
-    func unread(_ uids: [Int]) async throws -> Set<Int> {
-        guard !uids.isEmpty else { return [] }
+    /// Read state of the UIDs the server reported (UID → has \Seen), for `--mail-check`.
+    func seenFlags(_ uids: [Int]) async throws -> [Int: Bool] {
+        guard !uids.isEmpty else { return [:] }
         let reply = try await command("UID FETCH \(uids.map(String.init).joined(separator: ",")) FLAGS")
-        return Set(String(decoding: reply, as: UTF8.self).components(separatedBy: "\r\n").compactMap { line in
-            guard line.hasPrefix("* "), !line.contains("\\Seen"), let m = line.firstMatch(of: /UID (\d+)/) else { return nil }
-            return Int(m.1)
-        })
+        var out: [Int: Bool] = [:]
+        for line in String(decoding: reply, as: UTF8.self).components(separatedBy: "\r\n") where line.hasPrefix("* ") {
+            if let m = line.firstMatch(of: /UID (\d+)/), let uid = Int(m.1) { out[uid] = line.contains("\\Seen") }
+        }
+        return out
     }
 
     func close() async {
         _ = try? await command("LOGOUT")
         connection.cancel()
     }
+
+    /// Closes the socket at once; any pending send or receive then fails.
+    nonisolated func cancel() { connection.cancel() }
 
     private func read(tag: String?) async throws -> Data {
         while true {
@@ -331,11 +394,13 @@ actor IMAPConnection {
     }
 
     private nonisolated func send(_ line: String) async throws {
-        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-            connection.send(content: Data((line + "\r\n").utf8), completion: .contentProcessed { error in
-                if let error { c.resume(throwing: error) } else { c.resume() }
-            })
-        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                connection.send(content: Data((line + "\r\n").utf8), completion: .contentProcessed { error in
+                    if let error { c.resume(throwing: error) } else { c.resume() }
+                })
+            }
+        } onCancel: { connection.cancel() } // a send stuck on a dead socket would otherwise never return
     }
 
     private nonisolated func receive() async throws -> Data {
@@ -351,9 +416,22 @@ actor IMAPConnection {
 
     /// Runs `work` with a 30 s limit; on timeout the work is cancelled, which closes the connection.
     private func deadline<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        do {
+            return try await deadlineGroup(work)
+        } catch {
+            dead = true
+            throw error
+        }
+    }
+
+    private func deadlineGroup<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
             group.addTask(operation: work)
-            group.addTask { try await Task.sleep(for: .seconds(30)); throw MailError.timeout }
+            group.addTask { [connection] in
+                try await Task.sleep(for: .seconds(30))
+                connection.cancel() // unblocks the work child even if it ignores cancellation
+                throw MailError.timeout
+            }
             defer { group.cancelAll() }
             return try await group.next()!
         }
@@ -371,15 +449,16 @@ func runMailCheck() -> Never {
         do {
             let line = try await SchoolMail.session(address: address, password: password) { imap in
                 let uids = try await imap.search(since: .now.addingTimeInterval(-60 * 86_400))
-                let unreadBefore = try await imap.unread(uids)
-                let have = Set(MailCache.load().map(\.uid))
+                let unreadBefore = Set(try await imap.seenFlags(uids).filter { !$0.value }.keys)
+                let have = Set(MailCache.load().messages.map(\.uid))
                 // Fetch everything not cached yet, plus up to 10 unread mails, so the check proves PEEK leaves them unread.
                 let targets = Array(Set(uids.filter { !have.contains($0) }).union(unreadBefore.sorted().suffix(10))).sorted()
                 var parsed = 0
                 for uid in targets where try await imap.message(uid: uid) != nil { parsed += 1 }
-                let newlySeen = unreadBefore.intersection(targets).subtracting(try await imap.unread(targets)).count
+                let after = try await imap.seenFlags(targets) // only UIDs the server reported again count
+                let newlySeen = unreadBefore.intersection(targets).filter { after[$0] == true }.count
                 // Re-fetch the 5 newest cached mails: the in-process reader must give what the old full fetch stored.
-                let cached = MailCache.load().sorted { $0.uid > $1.uid }.prefix(5)
+                let cached = MailCache.load().messages.sorted { $0.uid > $1.uid }.prefix(5)
                 var same = 0
                 for m in cached where try await imap.message(uid: m.uid) == m { same += 1 }
                 return "searched \(uids.count) · unread \(unreadBefore.count) · fetched \(targets.count) (parsed \(parsed)) · newly seen \(newlySeen)"

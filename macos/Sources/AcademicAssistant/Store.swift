@@ -30,7 +30,8 @@ import Foundation
     @Published private(set) var calendarItems: [OutlookCalendar.Item] = [] // everything in the Outlook calendar, for the Calendar page
     @Published private(set) var hasMail = Keychain.read(host: SchoolMail.account) != nil
     @Published private(set) var mailNote: String?
-    private var mail = MailCache.load() // forwarded school mail, by Gmail UID
+    @Published private(set) var cacheNote: String? // a local cache that couldn't be written or made private
+    private var mail = MailCache.load() // forwarded school mail by Gmail UID, plus download progress
     private var titles = SummaryCache.load() // DeepSeek titles + Jev's checks, by source hash
     private var summarizing = false
 
@@ -41,12 +42,17 @@ import Foundation
         guard MoodleAccount.credentials() != nil else { return }
         Notifier.requestPermission()
         isConnected = true
-        if let cache = MoodleCache.load() { apply(cache); subjects = SchoolMail.merge(mail, into: subjects); addDocumentDates() }
+        if let cache = MoodleCache.load() { apply(cache); subjects = SchoolMail.merge(mail.messages, into: subjects); addDocumentDates() }
         board = boardItems(subjects) // didSet doesn't run for assignments made directly in init
         startAutoSync()
     }
 
     func subject(_ id: String) -> Subject? { subjects.first { $0.id == id } }
+
+    /// Runs a cache write; a failure becomes `cacheNote` (shown in Connect) instead of disappearing.
+    private func save(_ write: () throws -> Void) {
+        do { try write(); cacheNote = nil } catch { cacheNote = "Local cache: \(error.localizedDescription)" }
+    }
 
     func setLive(_ subjects: [Subject], synced: Date = .now) {
         self.subjects = subjects
@@ -55,7 +61,8 @@ import Foundation
     }
 
     private func apply(_ s: MoodleSync) {
-        let docs = Dictionary(subjects.map { ($0.id, ($0.events ?? []).filter { $0.source == .document }) }, uniquingKeysWith: { a, _ in a })
+        // Only PDF dates carry over: course-page dates come with the new sync itself (carrying them too doubled them).
+        let docs = Dictionary(subjects.map { ($0.id, ($0.events ?? []).filter(isPDFDate)) }, uniquingKeysWith: { a, _ in a })
         setLive(labeled(s.subjects.map { n in
             var n = n
             n.events = ((n.events ?? []) + (docs[n.id] ?? [])).sorted { $0.date < $1.date }
@@ -87,7 +94,7 @@ import Foundation
             guard isConnected else { return } // disconnected meanwhile
             let previous = lastSynced == nil ? nil : subjects // no "news" on the very first sync
             apply(result)
-            MoodleCache.save(result)
+            save { try MoodleCache.save(result) }
             await addOutlookCalendar()
             await addSchoolMail()
             if let previous, result.warnings.isEmpty, !lastSyncPartial { Notifier.post(Notifier.changes(old: previous, new: result.subjects)) }
@@ -118,12 +125,7 @@ import Foundation
     }
 
     private func applyDocumentDates(_ found: [String: [CourseEvent]]) {
-        subjects = subjects.map { s in
-            var s = s
-            s.events = ((s.events ?? []).filter { $0.source != .document } + (found[s.id] ?? [])).sorted { $0.date < $1.date }
-            return s
-        }
-        subjects = summarized(labeled(subjects, known), titles)
+        subjects = summarized(labeled(withPDFDates(subjects, found), known), titles)
         classify() // last steps of every sync: everything new is on hand now
         summarize()
     }
@@ -143,7 +145,7 @@ import Foundation
                 do { known[Jev.id(text)] = try await Jev.classify(text, key: key); done += 1 }
                 catch { failure = error.localizedDescription; break }
             }
-            KindCache.save(known)
+            save { try KindCache.save(known) }
             subjects = summarized(labeled(subjects, known), titles)
             classifierNote = failure.map { "stopped after \(done): \($0)" } ?? "\(known.count) items classified"
             summarize() // board items are known now
@@ -170,12 +172,12 @@ import Foundation
                     titles[Summarizer.id(e)] = s
                     if !s.accepted { rejected += 1 }
                     done += 1
-                    if done % 10 == 0 { SummaryCache.save(titles) }
+                    if done % 10 == 0 { save { try SummaryCache.save(titles) } }
                 } catch { failure = error.localizedDescription; break }
             }
             let live = Set(subjects.flatMap { $0.events ?? [] }.map(Summarizer.id))
             titles = titles.filter { live.contains($0.key) } // drop titles of items that no longer exist
-            SummaryCache.save(titles)
+            save { try SummaryCache.save(titles) }
             subjects = summarized(subjects, titles)
             summaryNote = failure.map { "stopped after \(done): \($0)" }
                 ?? "\(titles.count) titles · \(rejected) of the new ones failed Jev's check and kept their plain headline"
@@ -199,20 +201,25 @@ import Foundation
         let (address, password) = (String(saved[0]), String(saved[1]))
         let since = Date.now.addingTimeInterval(-60 * 86_400)
         do {
-            let have = Set(mail.map(\.uid))
-            let fresh = try await SchoolMail.session(address: address, password: password) { imap in // one login per sync
-                var out: [SchoolMail.Message] = []
-                for uid in try await imap.search(since: since).filter({ !have.contains($0) }).suffix(200) {
-                    if let m = try await imap.message(uid: uid) { out.append(m) }
-                }
-                return out
+            let start = mail
+            let updated = try await SchoolMail.session(address: address, password: password) { imap in // one login per sync
+                var store = start
+                let uids = try await imap.search(since: since)
+                store.prune(since: since, uids: Set(uids))
+                let todo = SchoolMail.toFetch(uids: uids, have: Set(store.messages.map(\.uid)), seen: store.seen, failures: store.failures)
+                // Saved after every message, so progress survives a stall or a quit (a write error shows after the loop).
+                await SchoolMail.download(Array(todo.suffix(200)), into: &store, fetch: { try await imap.message(uid: $0) },
+                                          save: { try? MailCache.save($0) })
+                return store
             }
-            if !have.isEmpty { Notifier.post(fresh.map { (title: "✉︎ \($0.from)", body: $0.subject) }) } // not on the first download
-            mail = (mail + fresh).filter { $0.date > since }
-            MailCache.save(mail)
-            mailNote = "\(mail.count) school emails"
+            let known = Set(start.messages.map(\.uid))
+            let fresh = updated.messages.filter { !known.contains($0.uid) }
+            if !start.messages.isEmpty { Notifier.post(fresh.map { (title: "✉︎ \($0.from)", body: $0.subject) }) } // not on the first download
+            mail = updated
+            save { try MailCache.save(mail) }
+            mailNote = "\(mail.messages.count) school emails" + (mail.seen.isEmpty ? "" : " · \(mail.seen.count) skipped (unreadable date)")
         } catch { mailNote = error.localizedDescription } // never the password
-        subjects = summarized(labeled(SchoolMail.merge(mail, into: subjects), known), titles)
+        subjects = summarized(labeled(SchoolMail.merge(mail.messages, into: subjects), known), titles)
     }
 
     /// Checks the Gmail login (sign in + open All Mail) before keeping it.
@@ -228,8 +235,8 @@ import Foundation
     func removeMail() {
         Keychain.delete(host: SchoolMail.account)
         hasMail = false
-        mail = []
-        MailCache.save([])
+        mail = MailStore()
+        save { try MailCache.save(MailStore()) }
         subjects = SchoolMail.merge([], into: subjects)
     }
 

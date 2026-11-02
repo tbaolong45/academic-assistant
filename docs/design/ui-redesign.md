@@ -43,7 +43,7 @@ Status: approved, 2026-11-02: direction A "Campus" (decisions in §7, build queu
 
 ## 2. Three directions
 
-All three use blue as the primary colour. Hex values are the validated ones from §4.
+All three use blue as the primary colour. Hex values are the validated ones from §4. Every number in the mock-ups (grades, percentages, times) is made up.
 
 ### A. "Campus" — native Mac, light and calm (recommended)
 
@@ -260,8 +260,8 @@ Steps 1–3 are the same for every direction. Step 4 onwards depends on the pick
 | U1 | Tokens | `Theme.swift` | `struct Token { let light, dark: String; var color: Color }` and `enum Palette` with the §4 roles for the chosen direction. Course hues get light and dark ramps (§3) plus `violet`, and `courseHues = [.green, .orange, .yellow, .magenta, .violet]`. Status colours. For one step, `Tech` stays as a thin alias (`Tech.text = Palette.text.color`, `Tech.neon = Palette.accentInk.color`: most neon uses are text and icons, which need accentInk's 4.5:1; the fill uses get `accent`/`accentSoft` in U2–U4) so the app still compiles and immediately looks blue. |
 | U2 | Effects | `Effects.swift` | Delete `TechBackground`, `TypewriterTitle` and `Pulse`. `techPanel` → `card(active:)` in the chosen style. `SectionLabel` → a plain sentence-case `.title3.semibold` header (keep the `.isHeader` trait). `stagger` loses its blur. |
 | U3 | App shell | `App.swift` | Remove `.preferredColorScheme(.dark)` and `.fontDesign(.monospaced)`, set `.tint(Palette.accent)`, restyle the sidebar rows (keep the button sidebar), use `Palette.bg` as the window background. The sidebar column can narrow (`min 220`) once names aren't monospaced. If raising the target: also `Package.swift`. |
-| U4 | Overview + Deadlines | `HomeView.swift`, `WeekView.swift`, `WeekBoardParts.swift` | Header ("Good morning" + date, sync status as a small dot + text), KPI tiles, rows, Do next chips, board columns and the today marker. Coordinate with T3's B3 (reason line) and B6 (filter menu), which touch the same views; do U4 before or after those, never in parallel. |
-| U5 | Other screens | `CourseView.swift`, `CalendarView.swift`, `AssessmentSheet.swift`, `ConnectView.swift`, `WhatIfPanel.swift`, `ScoreChart.swift` | The chart keeps the dataviz mark specs; re-check its colours against the new surfaces. |
+| U4 | Overview + Deadlines | `HomeView.swift`, `WeekView.swift`, `WeekBoardParts.swift` | Header ("Good morning" + date, sync status as a small dot + text), KPI tiles, rows, Do next chips, board columns and the today marker. Coordinate with T3's B3 (reason line) and B6 (filter menu), which touch the same views; do U4 before or after those, never in parallel. **Motion (after U2):** nothing loops forever on screen. A loop may run only while work is in progress (a sync). Decorative motion becomes static or a one-shot transition. Check: idle CPU stays under 5 % with that screen open. Remove: the `repeatForever` glow at `WeekBoardParts.swift:349` (make it a static highlight). Slow down: the 1 s `TimelineView`s at `HomeView.swift:55` and `:82` go to 60 s, since countdowns show minutes at most. |
+| U5 | Other screens | `CourseView.swift`, `CalendarView.swift`, `AssessmentSheet.swift`, `ConnectView.swift`, `WhatIfPanel.swift`, `ScoreChart.swift` | The chart keeps the dataviz mark specs; re-check its colours against the new surfaces. **Motion (after U2):** nothing loops forever on screen. A loop may run only while work is in progress (a sync). Decorative motion becomes static or a one-shot transition. Check: idle CPU stays under 5 % with that screen open. Remove:<ul><li>`CourseView.swift:466`, the 60 fps `TimelineView(.animation)` while a course is open. It's the largest one left, so do it first, even if the rest of U5 waits.</li><li>`ScoreChart.swift:78`, the marching ants (`repeatForever` plus the 35 ms sleep loop): a static dashed line.</li><li>`AssessmentSheet.swift:68`, the 12 s decorative spin: static.</li></ul>Keep the 30 s `TimelineView` at `ConnectView.swift:290`. |
 | U6 | Clean-up | all | Remove the `Tech` alias, rename the remaining uses to `Palette` (mechanical), and update the CLAUDE.md "Look" bullet (architect). |
 
 **Test writer (SelfCheck.swift), pure numbers, no UI:**
@@ -329,7 +329,6 @@ Wherever a check needs network or a mail server, the step stays pure and the liv
   - (g) A tagged `A3 NO [AUTHENTICATIONFAILED] Invalid credentials` gives `MailError.badLogin`, and its description contains neither the address nor the password from the fixture.
   - (h) The `AUTHENTICATE` line built for `a@x.com` / `p"w\` is `A2 AUTHENTICATE PLAIN ` + base64("\0a@x.com\0p\"w\\"), and the password doesn't appear in the line as plain text.
   - (i) **Manual, live:** a `--mail-check` mode (counts only) fetches the new UIDs, then reads `UID FETCH n FLAGS` for them on the same EXAMINE connection and prints `fetched N · newly seen 0`. Run it with at least one unread school mail and report the line.
-- Check (e) below (the fake IMAP server) is dropped, since curl is no longer used for mail.
 - Implementation notes for the builder:
   - Fetch with a custom command on the mailbox URL (`-X "UID FETCH <uid> BODY.PEEK[]<0.262144>"`). The reply comes back as an untagged `* n FETCH (UID … BODY[]<0> {len}` line, then `len` **bytes**, then `)`.
   - The literal length counts bytes, so for this path `curl()` must hand back `Data` (or the byte slice), not a decoded `String`.
@@ -338,7 +337,7 @@ Wherever a check needs network or a mail server, the step stays pure and the liv
   - (b) `SchoolMail.literal(Data("* 1 FETCH (UID 7 BODY[]<0> {23}\r\nSubject: hi\r\n\r\nhello\r\n)\r\n".utf8))` returns exactly the 23 bytes `Subject: hi\r\n\r\nhello\r\n`.
   - (c) Same as (b), but with a 2-byte UTF-8 character ("é") in the body and `{24}`: the result is 24 bytes, so the parser counts bytes, not characters.
   - (d) A literal cut at 262,144 bytes mid-part still parses: `parse` returns the subject and a non-empty body, with no crash.
-  - (e) **Manual:** run `python3 /private/tmp/claude-501/-Users-logrian-orca-projects-academic-assistant/14b084cf-f894-4ac5-9a07-13d2a6d3d868/scratchpad/fakeimap-keep.py > imap.log &` (the architect's fake IMAP server: one connection on 127.0.0.1:14300, logs every command), then point the new fetch at `imap://127.0.0.1:14300/INBOX`. The log must show `BODY.PEEK[` and no `BODY[]`. The builder pastes the log lines into its report. The fake server may need a small change to answer the custom `-X` form; that's test scaffolding, not app code.
+  - (e) Dropped: it used a fake curl server, and curl is no longer used for mail (see "Revised" above).
 
 **P4: mail progress**
 - Checks:
@@ -346,12 +345,19 @@ Wherever a check needs network or a mail server, the step stays pure and the liv
   - (b) Pure `SchoolMail.toFetch(uids: [1,2,3,4,5], have: [1], seen: [2], failures: [3: 3, 4: 1])` == `[4, 5]`. UID 3 is skipped after 3 failures; UID 2 is seen but unparseable.
   - (c) With an injected fetch closure where UID 3 of [1…5] throws: messages 1 and 2 are kept and saved, `failures[3]` == 1, and 4 and 5 are still tried.
   - (d) A message whose `parse` returns nil goes into `seen`, so the next run doesn't fetch it again.
+  - (e) (R2 #10) `mailNote` reports how many messages were skipped as unreadable, e.g. "49 school emails · 1 skipped (unreadable date)".
 
 **P2: one publish per sync**
+- Also covers R2 #2 and #4 (`backend-review.md` §2.4). `Store` keeps a sync `generation`:
+  - It's bumped at the start of every sync and by `connect` and `disconnect`.
+  - The one publish, and the PDF-scan result, only apply when their generation still matches.
+  - `disconnect()` cancels the running sync task.
 - Checks:
   - (a) Pure `normalize(moodle:outlook:mail:docs:known:titles:)` on a fixture (the sample subjects, 1 one-off Outlook item, 1 mail with a date) equals today's chain `apply` → `OutlookCalendar.merge` → `SchoolMail.merge` → `labeled` → `summarized`. Compare by event ids.
   - (b) The summarizer's prune keeps the title of an Outlook event and of a mail event when it runs against `normalize`'s output. This is the M1 regression.
   - (c) **Manual:** add a temporary counter on `subjects`' `didSet`, run one sync, and report the count (must be 1 for the sync itself; downloads and AI runs publish separately). Remove the counter.
+  - (d) The pure gate `Store.isCurrent(generation:current:)` (or whatever the builder names it): a result from generation 3 is dropped when the current one is 4 (a disconnect or a newer sync happened), and kept when it is 3.
+  - (e) **Manual (R2 #2):** connect with mail set up, start a sync, press Disconnect while it runs. The sample dashboard must show no mail or Outlook item. Report what you saw.
 
 **U2 + proposal 5: no endless animation**
 - Checks:

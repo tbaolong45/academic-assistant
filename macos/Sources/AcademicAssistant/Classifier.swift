@@ -67,13 +67,17 @@ enum Jev {
     static func yesNo(state: Any, _ questions: [String: String], key: String) async throws -> [String: Double] {
         // Questions are scrubbed too: Summarizer quotes each source sentence in one.
         let qs = questions.mapValues { ["type": "noul", "instructions": scrubPersonal($0)] }
-        let scrubbed: Any = switch state {
+        let data = try await post(try JSONSerialization.data(withJSONObject: ["model": model, "state": scrubbedState(state), "questions": qs]), key: key)
+        return try parseYesNo(data)
+    }
+
+    /// What `yesNo` sends as its state: a String scrubbed, or every String value of a dictionary; anything else as is.
+    static func scrubbedState(_ state: Any) -> Any {
+        switch state {
         case let s as String: scrubPersonal(s)
         case let d as [String: Any]: d.mapValues { ($0 as? String).map(scrubPersonal) ?? $0 }
         default: state
         }
-        let data = try await post(try JSONSerialization.data(withJSONObject: ["model": model, "state": scrubbed, "questions": qs]), key: key)
-        return try parseYesNo(data)
     }
 
     static func parseYesNo(_ data: Data) throws -> [String: Double] {
@@ -119,12 +123,13 @@ enum JevError: LocalizedError {
 enum KindCache {
     static let url = MoodleCache.url.deletingLastPathComponent().appending(path: "kinds.json")
     static func load() -> [String: Jev.Answer] { (try? JSONDecoder().decode([String: Jev.Answer].self, from: Data(contentsOf: url))) ?? [:] }
-    static func save(_ all: [String: Jev.Answer]) { try? writeOwnerOnly(JSONEncoder().encode(all), to: url) }
+    static func save(_ all: [String: Jev.Answer]) throws { try writeOwnerOnly(JSONEncoder().encode(all), to: url) }
 }
 
 /// Removes personal details before text leaves the Mac (Jev, DeepSeek): email addresses, phone numbers and the
 /// signature block. Dates, times, course codes, rooms and percentages stay. Cache keys still hash the original text.
-func scrubPersonal(_ text: String) -> String {
+func scrubPersonal(_ raw: String) -> String {
+    let text = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n") // CRLF mail
     let signOffs: Set = ["best regards", "kind regards", "warm regards", "regards", "best", "many thanks", "thanks",
                          "thank you", "cheers", "sincerely"]
     var lines = text.components(separatedBy: "\n")
@@ -140,8 +145,17 @@ func scrubPersonal(_ text: String) -> String {
         out = String(out.reversed().drop { $0.isWhitespace }.reversed())
     }
     out = out.replacingOccurrences(of: #"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"#, with: "[email]", options: .regularExpression)
-    // 9+ digits joined by spaces, "-", "." or "()" ("/" isn't a separator, so 23/10/2026 stays).
-    out = out.replacingOccurrences(of: #"(?<!\w)\+?\(?\d(?:[ .\-()]{0,2}\d){8,}(?!\w)"#, with: "[phone]", options: .regularExpression)
+    // Dotted dates (23.10.2026) are set aside first, so a range or a date with a time can't add up to 9 digits.
+    let dateRE = try! NSRegularExpression(pattern: #"(?<![\d.])(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.(?:19|20)\d\d(?![\d])"#)
+    var dates: [String] = []
+    for m in dateRE.matches(in: out, range: NSRange(out.startIndex..., in: out)).reversed() {
+        guard let r = Range(m.range, in: out) else { continue }
+        dates.append(String(out[r]))
+        out.replaceSubrange(r, with: "\u{E000}")
+    }
+    // 9+ digits joined by runs of up to 3 spaces, "-", "." or "()" ("050 - 123 - 4567"); "/" isn't one, so 23/10/2026 stays.
+    out = out.replacingOccurrences(of: #"(?<!\w)\+?\(?\d(?:[ .\-()]{0,3}\d){8,}(?!\w)"#, with: "[phone]", options: .regularExpression)
+    for d in dates.reversed() { if let r = out.range(of: "\u{E000}") { out.replaceSubrange(r, with: d) } }
     return out
 }
 

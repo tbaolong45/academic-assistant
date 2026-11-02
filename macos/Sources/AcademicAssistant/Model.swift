@@ -236,7 +236,22 @@ func deadlines(_ subjects: [Subject], from start: Date = .now, days: Int = 7) ->
 typealias BoardItem = Deadline
 
 func boardItems(_ subjects: [Subject]) -> [BoardItem] {
-    deadlines(subjects, in: Date.distantPast..<Date.distantFuture).map { var d = $0; d.headlineCache = d.headline; return d }
+    var ids = Set<String>() // SwiftUI's ForEach needs unique ids: keep the first (cross-source dedupe is B4's job)
+    return deadlines(subjects, in: Date.distantPast..<Date.distantFuture).filter { ids.insert($0.id).inserted }
+        .map { var d = $0; d.headlineCache = d.headline; return d }
+}
+
+/// A date read from a downloaded PDF (MaterialStore.documentEvents), as opposed to course-page text, which every Moodle
+/// sync brings again. Both are `.document` events (B2's Origin will tell them apart properly).
+func isPDFDate(_ e: CourseEvent) -> Bool { e.source == .document && !(e.detail ?? "").hasPrefix("On the course page") }
+
+/// `subjects` with their PDF dates replaced by `found` (by subject id). Course-page dates stay, so this is idempotent.
+func withPDFDates(_ subjects: [Subject], _ found: [String: [CourseEvent]]) -> [Subject] {
+    subjects.map { s in
+        var s = s
+        s.events = ((s.events ?? []).filter { !isPDFDate($0) } + (found[s.id] ?? [])).sorted { $0.date < $1.date }
+        return s
+    }
 }
 
 extension [Deadline] {
@@ -257,11 +272,12 @@ private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadli
             .filter { a in a.status == .open && a.due >= start && a.due < end && !s.assessments.contains { sameItem(a.title, $0.name) } }
             .map { Deadline(id: "\(s.id)/task/\($0.title)", subject: s, title: $0.title, date: $0.due, weight: percentInTitle($0.title),
                             detail: $0.details, kind: .deadline) }
-        let titles = Set((graded + other).map { $0.title.lowercased() })
+        let dated = (graded + other).map { (title: $0.title.lowercased(), date: $0.date) }
         let events = (s.events ?? [])
             // Jev's "grades out" / "info" are news, not deadlines (unclassified items stay, so nothing is lost without a key).
             .filter { e in e.date >= start && e.date < end && e.kind?.isDated != false && hasContent(e.title) // not a bare "Dec 8 — -"
-                && !titles.contains { sameItem(e.title.lowercased(), $0) } } // "Quiz 3 closes" ≈ "Quiz 3"
+                // "Quiz 3 closes" ≈ "Quiz 3", but only within a week of it (a same-named item months away is another one)
+                && !dated.contains { abs($0.date.timeIntervalSince(e.date)) <= 7 * 86_400 && sameItem(e.title.lowercased(), $0.title) } }
             .map { Deadline(id: "\(s.id)/event/\($0.source.rawValue)/\($0.date.timeIntervalSince1970)/\($0.title)", subject: s, title: $0.title,
                             date: $0.date, weight: percentInTitle($0.title), source: $0.source, detail: $0.detail, kind: $0.kind,
                             summary: $0.summary?.accepted == true ? $0.summary : nil, announcement: $0.announcement) }

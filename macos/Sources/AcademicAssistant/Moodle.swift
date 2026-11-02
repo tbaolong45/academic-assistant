@@ -589,7 +589,9 @@ extension Moodle {
     /// The course a message or notification is about: its code ("AI1115") or name ("linear algebra" also matches "Linear Algebraists").
     static func route(_ text: String, _ subjects: [Subject]) -> Int? {
         let t = text.lowercased()
-        return subjects.firstIndex { t.contains($0.code.lowercased()) } ?? subjects.firstIndex { t.contains($0.name.lowercased()) }
+        // GENERAL is the fallback, never a match: its code would catch any text saying "general" ("General Chemistry").
+        let courses = subjects.indices.filter { subjects[$0].code != "GENERAL" }
+        return courses.first { t.contains(subjects[$0].code.lowercased()) } ?? courses.first { t.contains(subjects[$0].name.lowercased()) }
     }
 
     static func announcement(_ d: Discussion) -> Announcement {
@@ -604,17 +606,24 @@ extension Moodle {
 enum MoodleCache {
     static var url: URL { .applicationSupportDirectory.appending(path: "AcademicAssistant/moodle-cache.json") }
     static func load() -> MoodleSync? { (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(MoodleSync.self, from: $0) } }
-    static func save(_ sync: MoodleSync) { try? writeOwnerOnly(JSONEncoder().encode(sync), to: url) } // grades: owner only
+    static func save(_ sync: MoodleSync) throws { try writeOwnerOnly(JSONEncoder().encode(sync), to: url) } // grades: owner only
     static func delete() { try? FileManager.default.removeItem(at: url) }
 }
 
 /// Writes a cache file only the user can read: folder 0700 (re-applied every time, in case it was loosened), file 0600.
+/// If only the folder's permissions can't be set, the data is still written, then the failure is thrown so it shows.
 func writeOwnerOnly(_ data: Data, to url: URL) throws {
     let fm = FileManager.default, folder = url.deletingLastPathComponent()
     try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-    try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path(percentEncoded: false))
+    let folderPrivate = (try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path(percentEncoded: false))) != nil
     try data.write(to: url, options: .atomic)
     try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path(percentEncoded: false))
+    guard folderPrivate else { throw CacheError.notPrivate }
+}
+
+enum CacheError: LocalizedError {
+    case notPrivate
+    var errorDescription: String? { "The app's data folder couldn't be made private to your account" }
 }
 
 // MARK: - `AcademicAssistant --moodle-check`: full sync with the stored key; prints counts and course codes only.

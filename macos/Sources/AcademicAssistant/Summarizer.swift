@@ -147,7 +147,7 @@ enum Summarizer {
 enum SummaryCache {
     static let url = MoodleCache.url.deletingLastPathComponent().appending(path: "summaries.json")
     static func load() -> [String: Summary] { (try? JSONDecoder().decode([String: Summary].self, from: Data(contentsOf: url))) ?? [:] }
-    static func save(_ all: [String: Summary]) { try? writeOwnerOnly(JSONEncoder().encode(all), to: url) }
+    static func save(_ all: [String: Summary]) throws { try writeOwnerOnly(JSONEncoder().encode(all), to: url) }
 }
 
 /// Puts known titles on events (pure, like `labeled`).

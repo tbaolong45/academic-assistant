@@ -457,27 +457,12 @@ private struct NewChip: View {
     }
 }
 
-/// 3pt course-accent bar with a light sweep looping across it (static under Reduce Motion).
+/// 3pt course-accent bar. Static: the looping light sweep redrew at 60 fps for as long as a course page was open.
 private struct ShimmerBar: View {
     let color: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { timeline in
-            GeometryReader { g in
-                let p = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.6) / 2.6
-                let w = g.size.width * 0.22
-                Capsule().fill(color)
-                    .overlay(alignment: .leading) {
-                        if !reduceMotion {
-                            LinearGradient(colors: [.clear, .white.opacity(0.75), .clear], startPoint: .leading, endPoint: .trailing)
-                                .frame(width: w)
-                                .offset(x: p * (g.size.width + w) - w)
-                        }
-                    }
-                    .clipShape(Capsule())
-            }
-        }
+        Capsule().fill(color)
         .frame(height: 3)
         .shadow(color: color.opacity(0.7), radius: 6)
         .accessibilityHidden(true)

@@ -100,7 +100,8 @@ struct RootView: View {
                     Image(systemName: "calendar.day.timeline.left").foregroundStyle(Tech.neon)
                     Text("Deadlines")
                     Spacer(minLength: 4)
-                    Text("\(store.board.between(weekStart(of: .now), weekStart(of: .now).addingTimeInterval(7 * 86_400)).count)").foregroundStyle(Tech.text2).monospacedDigit()
+                    let monday = weekStart(of: .now)
+                    Text("\(store.board.between(monday, monday.addingTimeInterval(7 * 86_400)).count)").foregroundStyle(Tech.text2).monospacedDigit()
                 }
                 sidebarRow(.calendar, index: 2) {
                     Image(systemName: "calendar").foregroundStyle(Tech.neon)

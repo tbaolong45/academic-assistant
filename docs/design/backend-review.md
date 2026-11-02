@@ -92,9 +92,32 @@ Verdict: **Confirmed** = reproduced or measured, or follows directly from the co
 | L6 | `Outlook.swift:59` | TZID times read as the Mac's zone are wrong after travel | Known (ponytail note) | Map the few Windows zone names when it matters |
 | L7 | `Moodle.swift:588` | A message containing "communication" routes to the Communication course | Plausible | Prefer the code; match names only as whole words |
 
-### 2.4 R2 (reviewer) findings
+### 2.4 R2 (reviewer) findings (`docs/reviews/R2.md`, checked by the architect 2026-11-02)
 
-Pending. The coordinator will forward them; I'll mark each one confirmed or not here.
+I checked each finding against the current tree (after B1 and P1). Where useful I counted occurrences in the local caches, counts only. Verdicts use the same scale as above.
+
+| R2 # | Sev. | Finding (short) | Verdict | Where it goes |
+|---|---|---|---|---|
+| 1 | **High** | Course-page and GENERAL dates are deleted after every sync | **Confirmed.** `Store.swift:123` drops every `.document` event, but `documentEvents` returns PDF dates only. The cached raw sync holds **10** course-page events, which are on the board only between `apply` and the end of the PDF scan. `Store.swift:58` has the mirror problem: it carries old `.document` events into the new sync, so a naive fix at :123 alone would duplicate them. | **F1** (proposed to the coordinator, who owns the F1 file). One predicate `isPDFDate(e)` (`.document` and not "On the course page" detail), used at both :58 and :123. B2's `Origin` replaces it later. |
+| 2 | Medium | Disconnect during a sync merges real mail and calendar into the sample data | **Confirmed** from the code: no `isConnected` check after `await addOutlookCalendar()` / `addSchoolMail()`. | **P2** (added): a sync generation, bumped by connect and disconnect, checked before the one publish. `disconnect()` cancels the running sync task. |
+| 3 | Medium | Duplicate cards across sources; identical `Deadline.id`s possible | **Plausible.** The mechanism is real (Moodle dedupes only inside its own result). 0 of 49 cached mails repeat a Moodle announcement title today. | **B4** (T3 clustering already covers it); extra check added. Proposed for **F1**: a one-line safety net: board items unique by `id`, so `ForEach` never sees duplicates. |
+| 4 | Medium | A stale PDF scan overwrites a newer sync | **Confirmed** from the code (`addDocumentDates` applies results to whatever `subjects` is when the scan ends). | **P2** (added): the scan result carries its sync generation and is dropped if a newer sync has started. |
+| 5 | Low–Med | "Oct. 20" never parsed (split on ". ") | **Confirmed** from the code; 0 occurrences in cached texts | F2 (proposed below, needs approval) |
+| 6 | Low–Med | Any text with "general" routes to GENERAL | **Confirmed** (`Moodle.swift:592`: a bare substring test on code `"GENERAL"`, run before the name pass) | **F1** (proposed): `route` skips the GENERAL subject. |
+| 7 | Low | `known` (`kinds.json`) grows without bound | Confirmed (= my L5); 380 entries, 38 KB | Backlog |
+| 8 | Low | `titles` pruned only when `summarize()` runs | Confirmed | Backlog |
+| 9 | Low | Silent cache-save failures | Confirmed | Already in **F1 #9** |
+| 10 | Low | Mail with an unparseable `Date` dropped silently | Confirmed (with my M3, refetch) | **P4** (added): record it as seen and count skipped mail in `mailNote` |
+| 11 | Low | All-day ICS events run 23:59 → 23:59 on the Calendar page | Confirmed from the code | F2 (proposed) |
+| 12 | Low | "3/4 of you" becomes 3 April | Confirmed from the code; 0 bare fractions in cached texts | F2 (proposed) |
+| 13 | Low | A late-December date in an early-January post lands a year ahead | Confirmed from the code | F2 (proposed) |
+| 14 | Low | curl stderr never drained | **Obsolete:** P1 removed curl from the mail path | none |
+| minor | — | `Occurrence.id` collision; old site token kept on site switch; deleted Moodle files kept locally; clock time taken from an unrelated next sentence | Plausible, all small | Backlog. The token one goes to F2 if approved, since it's a stale secret. |
+
+**Proposed F2, "date and calendar edge cases":** R2 5, 11, 12, 13, the next-sentence clock, and the stale site token on a site switch.
+- None of these occurs in today's data except the token.
+- **Needs user approval.** It's like proposal 9, which the user skipped.
+- I recommend approving only the token clean-up, which is one line in `connect`, and keeping the rest in the backlog.
 
 ## 3. Pipeline and algorithm options
 

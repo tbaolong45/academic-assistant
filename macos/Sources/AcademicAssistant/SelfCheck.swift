@@ -434,12 +434,13 @@ func runSelfCheck() -> Never {
     let utf8Reply = Data("* 1 FETCH (UID 7 BODY[]<0> {\(utf8Body.utf8.count)}\r\n\(utf8Body))\r\n".utf8)
     check(utf8Body.utf8.count > utf8Body.count && SchoolMail.literal(utf8Reply) == Data(utf8Body.utf8),
           "mail: the literal counts bytes, not characters (a 2-byte letter keeps \(utf8Body.utf8.count) bytes)")
-    let bigBody = String(repeating: "x", count: 300_000)
+    let bigUnit = "héllo — the final paper is due on 13 November. "
     let bigRaw = "From: UG <ug@mbzuai.ac.ae>\r\nTo: student@mbzuai.ac.ae\r\nSubject: Big mail\r\n"
-        + "Date: Wed, 28 Oct 2026 16:25:00 +0400\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + bigBody
-    let cutMsg = SchoolMail.parse(String(bigRaw.prefix(262_144)), uid: 9)
-    check(cutMsg?.subject == "Big mail" && (cutMsg?.body.count ?? 0) > 100_000,
-          "mail: a message cut at 262,144 bytes still parses to a subject and a non-empty body")
+        + "Date: Wed, 28 Oct 2026 16:25:00 +0400\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+        + String(repeating: bigUnit, count: 9_000)
+    let cutMsg = SchoolMail.parse(String(decoding: Data(bigRaw.utf8).prefix(262_144), as: UTF8.self), uid: 9)
+    check(cutMsg?.subject == "Big mail" && cutMsg?.body.contains("final paper") == true,
+          "mail: a multibyte message cut at 262,144 bytes (mid-character) still parses to a subject and a body")
     let whole = Data("* 1 FETCH (UID 7 BODY[]<0> {\(literalBody.utf8.count)}\r\n\(literalBody))\r\nA4 OK Fetch completed\r\n".utf8)
     var reader = IMAPReader()
     reader.feed(whole.prefix(whole.count - 12))
@@ -448,6 +449,18 @@ func runSelfCheck() -> Never {
     let complete = reader.response(tag: "A4")
     check(early == nil && complete != nil && SchoolMail.literal(complete!) == Data(literalBody.utf8),
           "mail: bytes fed in two chunks give nil until the tagged line arrives, then the whole response")
+    // F1 / P1 #2: every byte offset, not just one lucky split.
+    var splitOK = true, splitAt = 0
+    for cut in 1..<whole.count {
+        var r = IMAPReader()
+        r.feed(whole.prefix(cut))
+        if r.response(tag: "A4") != nil { splitOK = false; splitAt = cut; break }
+        r.feed(whole.suffix(whole.count - cut))
+        guard let reply = r.response(tag: "A4"), SchoolMail.literal(reply) == Data(literalBody.utf8) else {
+            splitOK = false; splitAt = cut; break
+        }
+    }
+    check(splitOK, "mail: a reply split at every byte offset is nil until complete, then the same literal (failed at \(splitAt))")
     func mailError(_ response: String, login: Bool) -> MailError? {
         do { try SchoolMail.status(Data(response.utf8), tag: "A3", login: login); return nil }
         catch { return error as? MailError }
@@ -455,10 +468,73 @@ func runSelfCheck() -> Never {
     check(mailError("A3 NO [AUTHENTICATIONFAILED] Invalid credentials\r\n", login: true) == .badLogin
           && mailError("A3 NO [AUTHENTICATIONFAILED] Invalid credentials\r\n", login: false) == .server("NO"),
           "mail: a rejected sign-in is badLogin with no server text; another NO is server(NO)")
+    let rejected = mailError("A3 NO [AUTHENTICATIONFAILED] a@x.com p\"w\\", login: true)
+    let rejectedText = rejected?.errorDescription ?? ""
+    check(rejected == .badLogin && !rejectedText.contains("a@x.com") && !rejectedText.contains("p\"w\\"),
+          "mail: a rejected sign-in's message repeats neither the address nor the password")
     let authLine = SchoolMail.authenticateLine(tag: "A2", address: "a@x.com", password: "p\"w\\")
     check(authLine == "A2 AUTHENTICATE PLAIN " + Data("\0a@x.com\0p\"w\\".utf8).base64EncodedString()
           && !authLine.hasSuffix("\r\n"),
           "mail: AUTHENTICATE PLAIN carries NUL-separated address+password, base64, with no CRLF")
+
+    // MARK: - F1 (review fixes): scrub, dedupe, document dates, routing
+
+    let spacedPhone = scrubPersonal("Call 050 - 123 - 4567")
+    check(spacedPhone.contains("[phone]") && !spacedPhone.contains(where: \.isNumber),
+          "scrub: '050 - 123 - 4567' (3-character separator runs) becomes [phone] (got \(spacedPhone))")
+    let dottedRange = "23.10.2026-25.10.2026", dottedTime = "23.10.2026 10.00"
+    check(scrubPersonal(dottedRange) == dottedRange && scrubPersonal(dottedTime) == dottedTime,
+          "scrub: dotted dates ('23.10.2026-25.10.2026', '23.10.2026 10.00') are not phone numbers")
+    let crlfSig = scrubPersonal("Submit.\r\n\r\nBest regards,\r\nDr. Jane Doe")
+    check(crlfSig.contains("Submit.") && !crlfSig.contains("Jane"),
+          "scrub: a CRLF signature block is cut too (got \(crlfSig))")
+    let strState = Jev.scrubbedState("Contact jane.doe@mbzuai.ac.ae") as? String
+    let dictScrubbed = Jev.scrubbedState(["text": "Call +971 50 123 4567", "n": 3]) as? [String: Any]
+    check(strState == "Contact [email]" && dictScrubbed?["text"] as? String == "Call [phone]" && dictScrubbed?["n"] as? Int == 3,
+          "scrub: Jev's yes/no state is scrubbed as a string and inside a dictionary, other values untouched")
+
+    // B1 #3: an event is only hidden by a matching assessment/assignment within ±7 days.
+    let f1Subject = Subject(id: "f1", name: "F1", code: "F1", hue: .green, assessments: [],
+        assignments: [AssignmentItem(title: "Final Paper", due: Date.now.addingTimeInterval(21 * 86_400), status: .open)],
+        materials: [], announcements: [],
+        events: [CourseEvent(title: "Final Paper submission", date: Date.now.addingTimeInterval(2 * 86_400),
+                             source: .announcement, detail: "Final Paper submission opens")])
+    let f1Board = boardItems([f1Subject])
+    let f1Event = f1Board.first { $0.source == .announcement }
+    check(f1Board.count == 2 && f1Event?.headlineCache == f1Event.map { mainPoint($0.title) },
+          "board: an event 3 weeks away from a same-named open assignment is still shown, headline cached (got \(f1Board.count) items)")
+
+    // F1-12: course-page dates survive a re-sync; only PDF dates are replaced.
+    let pageDate = CourseEvent(title: "Quiz 2", date: Date.now.addingTimeInterval(86_400), source: .document,
+                               detail: "On the course page: Quiz 2 is on 12 November")
+    let pdfDate = CourseEvent(title: "Final", date: Date.now.addingTimeInterval(2 * 86_400), source: .document,
+                              detail: "Final exam 15 December")
+    let chemSubject = Subject(id: "chem", name: "Chemistry", code: "CHEM101", hue: .green, assessments: [], assignments: [],
+                              materials: [], announcements: [], events: [pageDate, pdfDate])
+    let stripped = withPDFDates([chemSubject], [:])
+    let reapplied = withPDFDates(stripped, ["chem": [pdfDate]])
+    let appliedTwice = withPDFDates(reapplied, ["chem": [pdfDate]])
+    check(isPDFDate(pdfDate) && !isPDFDate(pageDate)
+          && stripped.first?.events?.map(\.title) == ["Quiz 2"]
+          && reapplied.first?.events?.count == 2 && appliedTwice.first?.events?.count == 2,
+          "documents: re-syncing drops the stale PDF date, keeps the course-page one, and never duplicates it")
+
+    // F1-13: the GENERAL entry must not swallow a real course whose name starts with "General".
+    let generalSubject = Subject(id: "general", name: "MBZUAI · General", code: "GENERAL", hue: .slate, assessments: [],
+                                 assignments: [], materials: [], announcements: [])
+    let chemCourse = Subject(id: "chem", name: "General Chemistry", code: "CHEM101", hue: .green, assessments: [],
+                             assignments: [], materials: [], announcements: [])
+    let routed = Moodle.route("General Chemistry review", [generalSubject, chemCourse])
+    check(routed == 1, "messages: 'General Chemistry review' routes to CHEM101, not to GENERAL (got \(String(describing: routed)))")
+
+    // F1-14: two board items that work out the same id collapse to the first.
+    let dupWhen = Date.now.addingTimeInterval(86_400)
+    let dupSubject = Subject(id: "dup", name: "Dup", code: "DUP", hue: .green, assessments: [], assignments: [], materials: [],
+        announcements: [], events: [CourseEvent(title: "Quiz 3", date: dupWhen, source: .announcement, detail: "a"),
+                                     CourseEvent(title: "Quiz 3", date: dupWhen, source: .announcement, detail: "b")])
+    let dupBoard = boardItems([dupSubject])
+    check(dupBoard.count == 1 && Set(dupBoard.map(\.id)).count == dupBoard.count && dupBoard.first?.detail == "a",
+          "board: items sharing an id are collapsed, the first one kept (got \(dupBoard.count) items)")
 
     // MARK: - Security (T1)
 
