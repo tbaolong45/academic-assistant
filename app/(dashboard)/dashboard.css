@@ -1,0 +1,45 @@
+/* Course Dashboard tokens. Shade ramps validated with the dataviz validator (ordinal, both modes). */
+:root {
+  color-scheme: light dark; /* native scrollbars, dialog and form controls follow the theme */
+  --surface: #fcfcfb;
+  --card: #ffffff;
+  --ink: #1a1a1c;
+  --ink-2: #55555b;
+  --ink-3: #75757b;
+  --hairline: #e6e6e2;
+  --radius: 14px;
+
+  /* Shade by weight band 0..3 (<5, 5–15, 15–30, >30): light -> dark */
+  --blue-0: #85b4f0; --blue-1: #5591dd; --blue-2: #2d6fbe; --blue-3: #154d8c;
+  --green-0: #82c38f; --green-1: #4ca563; --green-2: #17843f; --green-3: #005e26;
+  --orange-0: #e3a072; --orange-1: #cb7738; --orange-2: #aa5300; --orange-3: #7c3600;
+  --blue-tint: oklch(0.96 0.02 255); --green-tint: oklch(0.96 0.025 150); --orange-tint: oklch(0.96 0.025 55);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #141416;
+    --card: #1d1d20;
+    --ink: #ececee;
+    --ink-2: #a9a9b0;
+    --ink-3: #8c8c93;
+    --hairline: #2e2e33;
+
+    /* Dark mode flips the anchor: heavier weight = brighter, i.e. more prominent on the dark surface */
+    --blue-0: #2d4e78; --blue-1: #3d73b6; --blue-2: #5b9df0; --blue-3: #9eceff;
+    --green-0: #295935; --green-1: #33854a; --green-2: #51b36b; --green-3: #9bdda8;
+    --orange-0: #6e401e; --orange-1: #a65c20; --orange-2: #dc813b; --orange-3: #feb98b;
+    --blue-tint: oklch(0.25 0.04 255); --green-tint: oklch(0.25 0.04 150); --orange-tint: oklch(0.25 0.04 55);
+  }
+}
+
+/* Put .hue-<name> on any subject-scoped container; children use --s0..--s3, --accent, --tint. */
+.hue-blue { --s0: var(--blue-0); --s1: var(--blue-1); --s2: var(--blue-2); --s3: var(--blue-3); --accent: var(--blue-2); --tint: var(--blue-tint); }
+.hue-green { --s0: var(--green-0); --s1: var(--green-1); --s2: var(--green-2); --s3: var(--green-3); --accent: var(--green-2); --tint: var(--green-tint); }
+.hue-orange { --s0: var(--orange-0); --s1: var(--orange-1); --s2: var(--orange-2); --s3: var(--orange-3); --accent: var(--orange-2); --tint: var(--orange-tint); }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+.dash { max-width: 560px; margin: 0 auto; padding: 16px 16px 48px; }
+.dash a { color: inherit; text-decoration: none; }
+.dash button { font: inherit; color: inherit; }
+.dash :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 6px; }

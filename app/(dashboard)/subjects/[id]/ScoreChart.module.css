@@ -1,0 +1,64 @@
+.root { --plot: 160px; --head: 20px; --axis: 36px; }
+
+.kicker { margin: 0; font-size: 13px; color: var(--ink-2); }
+.hero { margin: 2px 0; font-size: 44px; font-weight: 650; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.sub { margin: 0 0 20px; font-size: 13px; color: var(--ink-3); }
+
+/* Chart: fixed y-axis + gridlines; only the columns scroll sideways. */
+.chart { position: relative; display: grid; grid-template-columns: var(--axis) minmax(0, 1fr); }
+.yAxis { position: relative; margin-top: var(--head); height: var(--plot); }
+.yAxis span { position: absolute; right: 6px; transform: translateY(50%); font-size: 11px; line-height: 1; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.grid { position: absolute; top: var(--head); left: var(--axis); right: 0; height: var(--plot); pointer-events: none; }
+.grid i { position: absolute; left: 0; right: 0; height: 1px; background: var(--hairline); transform: translateY(50%); }
+.scroller { position: relative; overflow-x: auto; }
+.cols { display: flex; width: max-content; min-width: 100%; }
+
+.col {
+  flex: 1 0 76px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 0 4px 8px; border: 0; background: none; border-radius: 8px; cursor: pointer;
+}
+.col:hover, .col:focus-visible { background: color-mix(in oklab, var(--ink) 6%, transparent); }
+.track { position: relative; display: block; width: 100%; height: var(--plot); margin: var(--head) 0 6px; }
+.bar { position: absolute; bottom: 0; left: 50%; width: 24px; transform: translateX(-50%); border-radius: 4px 4px 0 0; }
+.upcoming { height: 100%; border: 2px solid; display: flex; justify-content: center; padding-top: 6px; }
+.upcoming span { writing-mode: vertical-rl; font-size: 10px; line-height: 1; color: var(--ink-2); }
+.value { position: absolute; left: 0; right: 0; margin-bottom: 4px; text-align: center; font-size: 11px; line-height: 1; color: var(--ink-2); }
+.name { font-size: 12px; line-height: 1.25; color: var(--ink-2); text-align: center; }
+.weight { font-size: 11px; color: var(--ink-3); }
+
+/* Legend */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 12px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--ink-2); }
+.legendTitle { flex-basis: 100%; color: var(--ink-3); }
+.swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: -1px; }
+.outline { border: 2px solid var(--ink-3); }
+
+/* Accessible table */
+.table { margin-top: 16px; overflow-x: auto; font-size: 13px; }
+.table summary { cursor: pointer; color: var(--ink-2); }
+.table table { width: 100%; margin-top: 8px; border-collapse: collapse; }
+.table th, .table td { padding: 6px 4px; border-bottom: 1px solid var(--hairline); text-align: left; }
+.table th { font-weight: 500; color: var(--ink-2); }
+
+/* Bottom sheet */
+.sheet {
+  width: 100%; max-width: min(560px, 100%); max-height: 85dvh; margin: auto auto 0; padding: 0; border: 0;
+  border-radius: var(--radius) var(--radius) 0 0; background: var(--card); color: var(--ink);
+}
+.sheet[open] { animation: slideUp 0.25s ease-out; }
+/* ponytail: scrim is the one non-token colour; no token is dark in both themes. */
+.sheet::backdrop { background: rgb(0 0 0 / 0.45); }
+@keyframes slideUp { from { transform: translateY(100%); } }
+@media (prefers-reduced-motion: reduce) { .sheet[open] { animation: none; } }
+
+.sheetBody { padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
+.sheetHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sheetHead h2 { margin: 0; font-size: 20px; }
+.close { min-height: 36px; padding: 6px 14px; border: 1px solid var(--hairline); border-radius: 999px; background: none; cursor: pointer; }
+.status { margin: 8px 0 0; font-size: 14px; color: var(--ink-2); }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 16px 0; font-size: 14px; }
+.facts dt { color: var(--ink-3); }
+.facts dd { margin: 0; }
+.muted { color: var(--ink-3); }
+.topicsTitle { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chips li { padding: 4px 10px; border-radius: 999px; background: var(--tint); font-size: 13px; }

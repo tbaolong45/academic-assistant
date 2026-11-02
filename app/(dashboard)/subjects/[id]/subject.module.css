@@ -1,0 +1,82 @@
+.back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-right: 12px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.header {
+  margin: 4px 0 16px;
+  padding-left: 12px;
+  border-left: 4px solid var(--accent);
+}
+.title { margin: 0; font-size: 24px; line-height: 1.2; color: var(--ink); }
+.code { margin: 2px 0 0; color: var(--ink-3); font-size: 13px; letter-spacing: 0.02em; }
+
+/* The tab bar scrolls inside itself on narrow screens; the page never does. */
+/* Four equal columns so every tab, including the active one, is always visible on a 390px phone. */
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 0 0 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+.tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 4px 2px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.2;
+  color: var(--ink-2);
+  border-bottom: 3px solid transparent;
+}
+.tab[aria-current="page"] {
+  color: var(--ink);
+  font-weight: 650;
+  border-bottom-color: var(--accent);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 12px 14px;
+}
+.row + .row { border-top: 1px solid var(--hairline); }
+.main { flex: 1; min-width: 0; }
+.name { margin: 0; color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+.meta { margin: 2px 0 0; color: var(--ink-3); font-size: 13px; }
+
+.pill,
+.tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+}
+.open { color: var(--ink); background: var(--tint); border-color: transparent; }
+
+/* Tiny shape marker per source; the text label is always present. */
+.source::before { content: ""; width: 6px; height: 6px; background: var(--ink-3); }
+.source[data-source="Moodle"]::before { border-radius: 50%; }
+.source[data-source="Teams"]::before { transform: rotate(45deg); }

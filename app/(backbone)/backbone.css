@@ -1,0 +1,39 @@
+:root {
+  --bg: #f7f7f5; --card: #fff; --text: #1d1d1f; --muted: #6b6b70; --line: #e4e4e0;
+  --accent: #2f5bd3; --ok: #1f8a4c; --bad: #c62828; --bad-bg: #fdecea;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141416; --card: #1e1e21; --text: #ececee; --muted: #9a9aa0; --line: #2e2e33;
+    --accent: #7c9cff; --ok: #4cc283; --bad: #ff6b6b; --bad-bg: #3a1d1d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+main { max-width: 760px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 1.5rem; margin: 8px 0 4px; }
+h2 { font-size: 1rem; margin: 24px 0 8px; }
+.muted { color: var(--muted); font-weight: normal; }
+.demo { background: var(--accent); color: #fff; text-align: center; font-size: 13px; padding: 4px; }
+header { background: var(--card); border-bottom: 1px solid var(--line); }
+nav { max-width: 760px; margin: 0 auto; padding: 8px 16px; display: flex; gap: 16px; overflow-x: auto; white-space: nowrap; }
+button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--text); cursor: pointer; }
+
+.health { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.conn { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--ok); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+.conn.error { border-left-color: var(--bad); background: var(--bad-bg); max-width: 100%; }
+.err { color: var(--bad); }
+
+.items { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.items li { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 4px; }
+.items li.seen { opacity: 0.6; }
+.items form { justify-self: start; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); font-size: 13px; }
+.badge { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 8px; padding: 1px 6px; border-radius: 4px; background: var(--line); }
+.score { font-weight: 600; }
+
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+td { padding: 8px 12px; border-top: 1px solid var(--line); }
+tr:first-child td { border-top: 0; }
+.num { text-align: right; white-space: nowrap; }

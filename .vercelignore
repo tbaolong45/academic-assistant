@@ -1,0 +1,7 @@
+node_modules
+.next
+.playwright-mcp
+*.tsbuildinfo
+mobile
+macos
+.env*
