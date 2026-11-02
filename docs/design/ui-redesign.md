@@ -271,7 +271,7 @@ Steps 1–3 are the same for every direction. Step 4 onwards depends on the pick
 4. `Hue.courseHues` doesn't contain `.blue`, and `courseHues.count == 5` with no repeats.
 5. An old cache whose subject has `"hue":"blue"` still decodes.
 
-### 6.1 U1c: brighter dark appearance (proposed 2026-11-02, waiting for the user)
+### 6.1 U1c: brighter dark appearance (approved by the user 2026-11-03 as previewed, dark `onAccent` labels included; built after B5)
 
 The user asked for more energy and contrast in dark mode. This step changes **dark values only** in `Theme.swift`; light stays as approved. The architect checked every value with the dataviz validator (`validate`, `validateOrdinal`, WCAG contrast).
 
@@ -346,7 +346,7 @@ The builder takes these one at a time, top to bottom. After each step the test w
 | 2 | **P1** Gmail: `BODY.PEEK[]` with a 256 KB partial fetch (proposal 1) | SchoolMail | none; first, because it changes the user's real mail now |
 | 3 | **P4** mail progress: save per message, remember failed and unparseable UIDs (proposal 4) | Store (`addSchoolMail`), SchoolMail (`MailCache`) | SchoolMail with P1, Store with B1 |
 | 4 | **P2** one publish per sync (proposal 2): sources fetched concurrently, a pure `normalize` assembles the subjects, `Store` publishes once | Store, Model | Store with B1 and P4; extends B1 |
-| 4a | **U1c** brighter dark appearance (§6.1), **after the user approves the look** | Theme, SelfCheck | none (the builder is past Theme.swift) |
+| 4a | **U1c** brighter dark appearance (§6.1), approved 2026-11-03; build after B5 | Theme, SelfCheck | none (the builder is past Theme.swift) |
 | 5 | **U1** Campus tokens, new course hues, `Tech` alias | Theme | none |
 | 6 | **U2** Effects, **including proposal 5**: `TechBackground` deleted, no endless animation left | Effects | none |
 | 7 | **U3** App shell, system appearance, macOS 26 target | App, Package.swift | App with B1 |

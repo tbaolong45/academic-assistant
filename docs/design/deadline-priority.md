@@ -181,6 +181,15 @@ Two items A and B are one cluster when all of these hold:
 
 Clustering runs per subject over all items: union-find on pairs, with n ≈ a few hundred per course. Today's `sameItem` prefix rule and exact-title rule are kept as a fast path: either one alone counts as a match.
 
+**As built (B4, approved by the architect 2026-11-03).** Each of these four refinements only blocks merges. They were found on the real cache:
+- *Words:* cluster words also drop move-cue words, weekdays and function words (has, been, will, with, from, this…). Otherwise "Lab has been moved to Tuesday" and "Lecture has been moved to Tuesday" merge.
+- *Separate submissions:* two `moodleActivity` items never merge.
+- *Number sets:* a union that would put two different non-empty number sets in one cluster is refused, so a numberless "Quiz on Tuesday" can't chain Quiz 3 and Quiz 4.
+- *Same source text:* the same non-nil `ref` (one PDF or course-page note) with different dates means different items, e.g. a schedule listing "Final Project Presentation" on 8 and 10 Dec. A real move inside one text is unaffected, because §2.3 already drops the "from" date.
+- *Moved window:* the 30-day window opens only for a stated cue (`moved == true`). Jev's `class_change` still picks the date (§2.4) but within 3 days only, because Jev labels holidays ("no classes") `class_change`.
+- *Fast path:* `sameItem` uses the same 3-day window; F1's interim ±7 days is gone.
+- **Known, accepted:** "Monday office hours cancelled" (28 Sep) and "Wednesday office hours continue as usual" (30 Sep) merge into one card, and the second shows only in the preview. It's low stakes, and splitting them would need wording polarity.
+
 TED example: "TED-Talk Script (8%)" gives {ted, talk, script}. "TED Script due 1 Nov" gives mainPoint "TED Script due", so {ted, script}. Overlap 2 ≥ min(2, 3, 2) ✓, no numbers ✓, same day ✓. One cluster, and the Moodle assignment wins.
 
 ### 2.3 "Moved to": the newer date replaces the old one

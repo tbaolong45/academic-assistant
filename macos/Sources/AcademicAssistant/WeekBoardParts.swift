@@ -127,6 +127,7 @@ private struct DeadlineCard: View {
     let deadline: Deadline, now: Date, open: () -> Void
     @Local private var showing = false
     @EnvironmentObject private var nav: Nav
+    @EnvironmentObject private var store: Store
 
     var body: some View {
         let d = deadline, p = d.subject.hue.palette
@@ -156,6 +157,7 @@ private struct DeadlineCard: View {
                     .font(big ? .callout.weight(.bold) : .caption.weight(.medium)).foregroundStyle(Palette.text.color)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 if let c = d.conflict { ConflictNote(text: c) } // Moodle's date kept; a newer post disagrees (D3)
+                if d.dateChanged { Tag(text: "Date changed", edge: amber) } // dismissed or snoozed, then moved (D4)
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 4) { when; Spacer(minLength: 4); if let weight { weight } }
                     VStack(alignment: .leading, spacing: 4) { when; if let weight { weight } }
@@ -167,7 +169,11 @@ private struct DeadlineCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .help(d.announcement == nil ? "Show details" : "Open the announcement")
-        .popover(isPresented: $showing, arrowEdge: .trailing) { DeadlinePreview(deadline: d, now: now) { showing = false; open() } }
+        .popover(isPresented: $showing, arrowEdge: .trailing) {
+            DeadlinePreview(deadline: d, now: now, openCourse: { showing = false; open() },
+                            mark: store.canMark ? { showing = false; store.mark(d, $0, until: $1) } : nil)
+        }
+        .contextMenu { if store.canMark { MarkActions(deadline: d, now: now) { store.mark(d, $0, until: $1) } } }
         .accessibilityLabel(spoken(d, now: now))
     }
 }
@@ -176,6 +182,7 @@ struct DoNextChip: View {
     let deadline: Deadline, now: Date, open: () -> Void
     @Local private var showing = false
     @EnvironmentObject private var nav: Nav
+    @EnvironmentObject private var store: Store
 
     var body: some View {
         let d = deadline, accent = d.subject.hue.palette.accent
@@ -191,7 +198,11 @@ struct DoNextChip: View {
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .popover(isPresented: $showing, arrowEdge: .bottom) { DeadlinePreview(deadline: d, now: now) { showing = false; open() } }
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            DeadlinePreview(deadline: d, now: now, openCourse: { showing = false; open() },
+                            mark: store.canMark ? { showing = false; store.mark(d, $0, until: $1) } : nil)
+        }
+        .contextMenu { if store.canMark { MarkActions(deadline: d, now: now) { store.mark(d, $0, until: $1) } } }
         .accessibilityLabel("Do next: " + spoken(d, now: now) + ". " + d.reason(now: now))
     }
 }
@@ -199,6 +210,7 @@ struct DoNextChip: View {
 /// What a deadline is about, shown when its card or chip is clicked: when, weight, where it came from and the full text.
 struct DeadlinePreview: View {
     let deadline: Deadline, now: Date, openCourse: () -> Void
+    var mark: ((Mark.State, Date?) -> Void)? = nil // nil on sample data
     @Local private var docs: [DocumentMention]? = nil
 
     var body: some View {
@@ -234,6 +246,7 @@ struct DeadlinePreview: View {
                 Text(d.weightNote).font(.caption2).foregroundStyle(Palette.text3.color)
             }
             if let c = d.conflict { ConflictNote(text: c + "; Moodle's date is shown") }
+            if let mark { HStack(spacing: 8) { MarkActions(deadline: d, now: now, act: mark) }.buttonStyle(.bordered).controlSize(.small).fixedSize() }
             if let also = d.alsoMentioned {
                 Text("Also mentioned in: \(also)").font(.caption2).foregroundStyle(Palette.text3.color).fixedSize(horizontal: false, vertical: true)
             }
@@ -327,6 +340,18 @@ struct BoardButton<Label: View>: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+    }
+}
+
+/// Done / Dismiss / Snooze ▸ (§3.4): the preview's buttons and the right-click menu of cards and Do next chips.
+private struct MarkActions: View {
+    let deadline: Deadline, now: Date, act: (Mark.State, Date?) -> Void
+    var body: some View {
+        Button("Done") { act(.done, nil) }
+        Button("Dismiss") { act(.dismissed, nil) }
+        Menu("Snooze") {
+            ForEach(snoozeOptions(deadline, now: now), id: \.label) { o in Button(o.label) { act(.snoozed, o.until) } }
+        }
     }
 }
 

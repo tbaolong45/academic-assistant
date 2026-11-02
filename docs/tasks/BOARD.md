@@ -25,10 +25,12 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | F1c | Fixes from reviews P2, F1b (5 items, 2 Medium) | Builder + Test writer | see docs/tasks/F1c-review-fixes.md | done; checks pending; review pending |
 | B3 | Priority + Do next (cutoffdate/extensionduedate, 28-day Do next) | Builder + Test writer | Model, Moodle, WeekView, WeekBoardParts | done; checks (a)-(h) pending; review pending |
 | F1d | Fixes from reviews B2, F1c (4 items, 1 Medium) | Builder + Test writer | see docs/tasks/F1d-review-fixes.md | done (d962b69 + next commit); review pending |
-| B4 | Cross-source dedupe (clusters), moved cue | Builder + Test writer | Model, Moodle, WeekBoardParts | done; 4 deviations with architect; checks + review pending |
-| B5 | Marks (done/dismiss) keyed by memberKey | Builder + Test writer | Model, Store, views | in progress |
+| B4 | Cross-source dedupe (clusters), moved cue | Builder + Test writer | Model, Moodle, WeekBoardParts | done (e864d77); 4 deviations approved by architect (§2.2 As built); checks + review pending |
+| P9 | Skip AI titles for members hidden behind a Moodle-activity winner | Builder + Test writer | Summarizer.swift, Model.swift | APPROVED by user 2026-11-03; build after U1c |
+| B5 | Marks (done/dismiss/snooze) keyed by memberKey | Builder + Test writer | BoardState (new), Model, Store, WeekBoardParts | done; checks + review pending |
+| U1c (build) | Dark retune | Builder | Theme.swift | in progress |
 | U4 | Overview + Deadlines restyle, endless-animation removal | Builder | HomeView, WeekView, WeekBoardParts | done (code); screenshots + idle CPU wait for signing cert |
-| U1c | Dark mode: brighter, more contrast, livelier hues (user request) | Architect → Builder | ui-redesign.md, then Theme.swift | architect drafting; user sees values before build; build after P2 |
+| U1c | Dark mode: brighter, more contrast, livelier hues (user request) | Architect → Builder | ui-redesign.md, then Theme.swift | APPROVED by user 2026-11-03 (as previewed); build after B5 |
 | P4 | Mail progress: per-message saves, retry cap, skipped-date count | Builder + Test writer | SchoolMail.swift, Store.swift | done; checks (c),(e) pending; review pending |
 | G1 | Entire + GitHub: public code repo, private checkpoints repo | Coordinator | git config, .entire/ | done: github.com/tbaolong45/academic-assistant (public), Entire mirror aws-ap-south-1 |
 
@@ -47,3 +49,4 @@ Decisions from the user (2026-11-02):
 - Reports: reviewer → docs/reviews/<ID>.md, researcher → docs/research/<ID>.md (report folders only, no code).
 - Git: only the coordinator commits and pushes, at green points (build-app.sh + self-check pass). Agents never commit, push or rewrite history.
 - Commits: stage only the files the finished step lists (never `git add -A` while the builder is mid-step).
+- User 2026-11-03: U1c dark retune approved as previewed (dark labels on blue). P9 (skip titles for posts hidden behind a Moodle card) approved.

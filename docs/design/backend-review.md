@@ -174,6 +174,11 @@ Not proposed: O6 (no measurable gain) and L3–L7 (fix when they occur).
   | 6 | P6 |
   | 7 | merged into B2 |
 
+- **P9 (user, 2026-11-03), the builder's proposal:** no AI title for a cluster member whose cluster winner is a Moodle activity, since the card shows the Moodle title anyway.
+  - The skip is decided from the *current* clusters on every `summarize()` run. A member whose winner is no longer a Moodle activity gets a title on the next run. That happens when the Moodle assignment is submitted or closed and leaves the board, or when the cluster splits.
+  - A dismiss marks the whole cluster, so it hides the card and needs no title.
+  - Prune keeps the existing titles of hidden members (they still exist), so a cluster that splits again doesn't pay twice.
+  - Check: a fixture with an open Moodle assignment plus a matching post → no summarizer request for the post; the same fixture with the assignment submitted → one request.
 - **Approved on condition:** proposal 8 (O3, incremental sync) once the researcher confirmed Q3. **Outcome: not built.**
   - T4 confirms a student can call it, but it is blind to manual grade items, extensions and overrides, section summaries and deletions.
   - So it can't replace a refetch and would only add about 13 calls per fast sync. See `ui-redesign.md` §8.1 P8.

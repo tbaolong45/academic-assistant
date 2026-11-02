@@ -13,9 +13,14 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
 @MainActor final class Store: ObservableObject {
     enum Source: Equatable { case sample, live(synced: Date) }
 
-    @Published private(set) var subjects: [Subject] = Subject.all { didSet { board = boardItems(subjects) } }
-    /// Every deadline, computed once per change of `subjects` (views slice it by date instead of rebuilding it per redraw).
-    @Published private(set) var board: [BoardItem] = boardItems(Subject.all)
+    @Published private(set) var subjects: [Subject] = Subject.all { didSet { rawBoard = boardItems(subjects); applyBoardMarks() } }
+    /// Every deadline with its mark, computed once per change of `subjects` or of the marks (views slice it by date
+    /// instead of rebuilding it per redraw). B6's "Show hidden" reads this.
+    @Published private(set) var items: [BoardItem] = boardItems(Subject.all)
+    /// What the board, Do next, Overview, the badge and crunch show: everything not marked away.
+    var board: [BoardItem] { items.filter { !$0.hidden } }
+    private var rawBoard: [BoardItem] = [] // `items` before marks
+    private var marks = BoardState.load() // done / dismissed / snoozed, by hashed member key
     @Published private(set) var source: Source = .sample
     @Published var syncError: String?
     private var lastSyncPartial = false // a sync with warnings may have missed items: don't diff against it
@@ -60,7 +65,8 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         isConnected = true
         let cache = MoodleCache.load()
         if let cache { use(cache); publish() }
-        board = boardItems(subjects) // didSet doesn't run for assignments made directly in init
+        rawBoard = boardItems(subjects) // didSet doesn't run for assignments made directly in init
+        applyBoardMarks()
         startAutoSync(scanFirst: cache != nil) // no cache = sample data on screen: nothing to scan or send to Jev
     }
 
@@ -69,6 +75,20 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     func subject(_ id: String) -> Subject? { subjects.first { $0.id == id } }
 
     /// Runs a cache write; a failure becomes `cacheNote` (shown in Connect) instead of disappearing.
+    var canMark: Bool { isConnected && lastSynced != nil } // sample data can't be marked
+
+    /// Marks the item's whole cluster (every member key), or clears the mark with nil.
+    func mark(_ d: Deadline, _ state: Mark.State?, until: Date? = nil) {
+        guard canMark else { return }
+        let m = state.map { Mark(state: $0, until: until, itemDate: d.date, at: .now) }
+        for k in d.clusterKeys { marks[BoardState.key(k)] = m }
+        save { try BoardState.save(marks) }
+        applyBoardMarks()
+    }
+
+    // ponytail: hiding is worked out when the data or the marks change, so a snooze ends at the next sync (≤ 5 min late).
+    private func applyBoardMarks() { items = applyMarks(rawBoard, marks, now: .now) }
+
     private func save(_ write: () throws -> Void) {
         do { try write(); cacheNote = nil } catch { cacheNote = "Local cache: \(error.localizedDescription)" }
     }
@@ -123,6 +143,8 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
             use(result)
             save { try MoodleCache.save(result) }
             publish()
+            let kept = pruneMarks(marks, live: Set(rawBoard.flatMap(\.clusterKeys).map(BoardState.key)), now: .now)
+            if kept.count != marks.count { marks = kept; save { try BoardState.save(marks) } }
             if let previous, result.warnings.isEmpty, !lastSyncPartial { Notifier.post(Notifier.changes(old: previous, new: result.subjects)) }
             lastSyncPartial = !result.warnings.isEmpty
             await downloadMaterials(token: creds.token)

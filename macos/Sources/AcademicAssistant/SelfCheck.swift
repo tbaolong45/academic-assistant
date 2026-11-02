@@ -879,6 +879,66 @@ func runSelfCheck() -> Never {
     check(weighted.count == 1 && weighted[0].weighting.value == 14 && weighted[0].weighting.text == "14%",
           "cluster: a PDF's '(14%)' gives the weightless Moodle item its weight (got \(weighted.first?.weighting.text ?? "none"))")
 
+    // MARK: - Done / dismiss / snooze (B5)
+
+    func b5(_ title: String, _ date: Date, key: String) -> Deadline {
+        Deadline(id: "b5/" + title, subject: b3LA, title: title, date: date, weight: nil, source: .announcement,
+                 kind: .deadline, memberKey: key, via: .news)
+    }
+    let b5When = b3At(2026, 11, 5)
+    let b5Key = "t:s/news/-/essay/0", b5Hashed = BoardState.key(b5Key)
+    let b5Item = b5("Essay", b5When, key: b5Key)
+    let b5Moved = b5("Essay", b5When.addingTimeInterval(2 * 86_400), key: b5Key)
+    let dismissMark = [b5Hashed: Mark(state: .dismissed, itemDate: b5When, at: b3Now)]
+    let dismissedNow = applyMarks([b5Item], dismissMark, now: b3Now)[0]
+    let dismissedMoved = applyMarks([b5Moved], dismissMark, now: b3Now)[0]
+    check(dismissedNow.hidden && !dismissedMoved.hidden && dismissedMoved.dateChanged,
+          "marks: a dismissed item comes back when its date moves 2 days, tagged as changed (D4)")
+    let doneMark = [b5Hashed: Mark(state: .done, itemDate: b5When, at: b3Now)]
+    check(applyMarks([b5Item], doneMark, now: b3Now)[0].hidden && applyMarks([b5Moved], doneMark, now: b3Now)[0].hidden,
+          "marks: a done item stays hidden after its date moves")
+    let snoozeUntil = b3Now.addingTimeInterval(3 * 86_400)
+    let snoozeMark = [b5Hashed: Mark(state: .snoozed, until: snoozeUntil, itemDate: b5When, at: b3Now)]
+    check(applyMarks([b5Item], snoozeMark, now: b3Now)[0].hidden
+          && !applyMarks([b5Item], snoozeMark, now: snoozeUntil.addingTimeInterval(60))[0].hidden,
+          "marks: a snoozed item is hidden until its snooze time, then visible")
+    let joinedMember = Deadline(id: "b5/member", subject: b3LA, title: "Essay", date: b5When, weight: nil,
+                                source: .announcement, kind: .deadline, memberKey: "t:s/news/-/essay/1", via: .news)
+    let mergedByMove = cluster([b5Item, joinedMember].map { var d = $0; if d.memberKey.hasSuffix("/1") { d.moved = true; d.posted = b3Now }; return d })
+    let memberMark = [BoardState.key("t:s/news/-/essay/1"): Mark(state: .dismissed, itemDate: b5When, at: b3Now)]
+    check(mergedByMove.count == 1 && mergedByMove[0].alsoIn.count == 1
+          && applyMarks(mergedByMove, memberMark, now: b3Now)[0].hidden,
+          "marks: a mark on a member applies to the whole cluster")
+    let oldMarkKey = BoardState.key("t:s/news/-/old/0"), keptMarkKey = BoardState.key("t:s/news/-/keep/0")
+    let ageing = [oldMarkKey: Mark(state: .done, itemDate: b3Now.addingTimeInterval(-31 * 86_400), at: b3Now),
+                  keptMarkKey: Mark(state: .done, itemDate: b3Now.addingTimeInterval(-29 * 86_400), at: b3Now)]
+    check(pruneMarks(ageing, live: [], now: b3Now).keys.sorted() == [keptMarkKey]
+          && pruneMarks(ageing, live: [oldMarkKey], now: b3Now).count == 2,
+          "marks: pruning drops a 31-day-old mark with no source, keeps a 29-day one and any live key")
+    let boardStateBase = FileManager.default.temporaryDirectory.appendingPathComponent("aa-board-state-\(UUID().uuidString)", isDirectory: true)
+    do {
+        defer { try? FileManager.default.removeItem(at: boardStateBase) }
+        let boardStateFile = boardStateBase.appendingPathComponent("board-state.json")
+        try writeOwnerOnly(Data("{}".utf8), to: boardStateFile)
+        check(perms(boardStateFile.deletingLastPathComponent().path(percentEncoded: false)) == 0o700
+              && perms(boardStateFile.path(percentEncoded: false)) == 0o600,
+              "marks: board-state.json lands in a 0700 folder as a 0600 file")
+    } catch { check(false, "marks: board-state.json write runs (\(error))") }
+
+    // MARK: - Summarizer targets (P9)
+
+    let hiddenPost = CourseEvent(title: "Final Paper", date: b3At(2026, 11, 1, 23, 59), source: .announcement,
+                                 detail: "Final Paper due 1 Nov", origin: "Final Paper due 1 Nov", via: .news)
+    let hiddenSubject = Subject(id: "hidden", name: "Hidden", code: "HID", hue: .green, assessments: [],
+                                assignments: [AssignmentItem(title: "Final Paper", due: b3At(2026, 11, 1, 23, 59), status: .open)],
+                                materials: [], announcements: [], events: [hiddenPost])
+    let hiddenBoard = boardItems([hiddenSubject])
+    let hiddenTitle = [Summarizer.id(hiddenPost): Summary(title: "Final paper due", parts: [], mentionsDate: 0.9,
+                                                          keepsPoint: 0.9, faithful: 0.9, specific: 0.9)]
+    check(hiddenBoard.count == 1 && hiddenBoard[0].alsoIn.count == 1
+          && Summarizer.prune(hiddenTitle, to: [hiddenSubject]).count == 1,
+          "summarizer: a hidden cluster member keeps its paid title (prune drops nothing it would re-buy)")
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.

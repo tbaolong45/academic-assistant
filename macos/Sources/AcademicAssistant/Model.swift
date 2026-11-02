@@ -307,6 +307,9 @@ struct Deadline: Identifiable, Sendable {
     var conflict: String? = nil // "Post on Thu 29 Oct says moved to Wed 4 Nov": a Moodle date a newer post disagrees with (D3)
     var alsoIn: [Deadline] = [] // the cluster's other members (`cluster`)
     var ref: String? = nil // `CourseEvent.ref`: the file or note a dated text item came from
+    var mark: Mark? = nil // done / dismissed / snoozed (`applyMarks`)
+    var hidden = false // marked and not back yet: off the board, Do next, Overview, the badge and crunch
+    var dateChanged = false // dismissed or snoozed, then its date moved by more than 12 h (D4)
 
     var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: nil) }
     /// A move cue in the text, or Jev's "class change" label (it catches wording the regex misses).
