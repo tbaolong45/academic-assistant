@@ -62,3 +62,8 @@ Decisions from the user (2026-11-02):
 - Git: only the coordinator commits and pushes, at green points (build-app.sh + self-check pass). Agents never commit, push or rewrite history.
 - Commits: stage only the files the finished step lists (never `git add -A` while the builder is mid-step).
 - User 2026-11-03: U1c dark retune approved as previewed (dark labels on blue). P9 (skip titles for posts hidden behind a Moodle card) approved.
+
+## Backlog (accepted, not scheduled)
+- F1k review #1/#2: an edited post title, or an assignment replaced under a new ID and title, shows the old copy next to the new one for up to 60 min, until the next slow sync. That's a duplicate, never a lost card. A real fix keys posts by Moodle discussion id, which would change `Announcement.key`, the marks and the AI-title ids, so it needs a migration plan from the architect.
+- F1g review #6: Restore clears by mark value. Needs two clusters with identical marks.
+- S5 (any mail sender can add dated items), S6 (web server actions unauthenticated, sample data only), S7 (Expo audit, breaking downgrade).
