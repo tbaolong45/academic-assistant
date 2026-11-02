@@ -33,6 +33,7 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | F1h | Cue + range fixes from F1g review (1 High) | Builder + Test writer | see docs/tasks/F1h-cue-range.md | done; gate 5 clusters; review pending |
 | F1i | B7 review fixes (1 High: same-size PDF update keeps old dates) | Builder + Test writer | see docs/tasks/F1i-b7-review.md | done; review pending |
 | P6 | Slow tier (60 min) for stale assignment status etc. | Builder + Test writer | Model, Moodle, Store | done; live fast/slow call counts need the user; 5-min forward throttle approved (⌘R still forces slow, verified Store.swift:140/145); review pending |
+| F1l | Abbreviated weekdays as relative dates (F1j review) | Builder + Test writer | Moodle.swift | done; abbreviations count only capitalised (Thu, THU), approved by coordinator |
 | F1k | P6 review fixes (1 High: failed fast assignments call wipes deadlines) | Builder + Test writer | see docs/tasks/F1k-p6-review.md | done; failed-fast gate 47 → 89 cards; review pending |
 | F1j | F1h/F1i review fixes (old PDF marks High, cue-aware relative days, per-key parse lock) | Builder + Test writer | see docs/tasks/F1j-review-fixes.md | done; gate 5 clusters, +1 real date; review pending |
 | U6 | Final cleanup: remove Tech alias, techPanel, TypewriterTitle, TechBackground | Builder | Theme, Effects, App | done |

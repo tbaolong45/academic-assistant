@@ -1358,6 +1358,19 @@ func runSelfCheck() -> Never {
     let f1jAbsoluteMove = Moodle.mentionedDates("Quiz on 20 Oct moved to Thursday", posted: f1jPosted, source: .announcement, via: .news)
     check(f1jAbsoluteMove.count == 1 && b4Is(f1jAbsoluteMove[0].date, 2026, 10, 8) && f1jAbsoluteMove[0].moved == true,
           "cluster: 'Quiz on 20 Oct moved to Thursday' gives that Thursday, moved (got \(f1jAbsoluteMove.map { "\($0.date) moved=\($0.moved ?? false)" }))")
+    let f1lPosted = b3At(2026, 10, 5) // a Monday
+    let f1lThu = Moodle.mentionedDates("The lab shifts to Thu", posted: f1lPosted, source: .announcement, via: .news)
+    let f1lTue = Moodle.mentionedDates("Quiz on 20 Oct moved to Tue", posted: f1lPosted, source: .announcement, via: .news)
+    let f1lNextMon = Moodle.mentionedDates("Quiz next Mon", posted: f1lPosted, source: .announcement, via: .news)
+    let f1lThuDot = Moodle.mentionedDates("Lab moved to Thu.", posted: f1lPosted, source: .announcement, via: .news)
+    check(f1lThu.count == 1 && b4Is(f1lThu[0].date, 2026, 10, 8) && f1lThu[0].moved == true
+          && f1lTue.count == 1 && b4Is(f1lTue[0].date, 2026, 10, 6) && f1lTue[0].moved == true
+          && f1lNextMon.count == 1 && b4Is(f1lNextMon[0].date, 2026, 10, 12)
+          && f1lThuDot.count == 1 && b4Is(f1lThuDot[0].date, 2026, 10, 8) && f1lThuDot[0].moved == true,
+          "cluster: abbreviated weekdays (Thu, Tue, next Mon, 'Thu.') resolve as dates")
+    check(Moodle.mentionedDates("Students who sat the midterm found it hard", posted: f1lPosted, source: .announcement, via: .news).isEmpty
+          && Moodle.mentionedDates("Enjoy the sun this weekend", posted: f1lPosted, source: .announcement, via: .news).isEmpty,
+          "cluster: lowercase 'sat' and 'sun' are words, not weekdays")
     check(Moodle.namedDays("moved from 1 Oct to 15 Dec", ranges: false) == ["10/1", "12/15"]
           && Moodle.namedDays("Dec 1-2", ranges: false) == ["12/1"],
           "dates: without ranges, only the explicit dates count (a news post adds no range days)")

@@ -619,7 +619,10 @@ extension Moodle {
 
     /// A sentence saying a date moved: "postponed to", "pushed back until", "moved from 20 Oct to 1 Nov". Every verb form;
     /// "to/until/till" must be followed by a date shape, so "moved to room 3" or "to the 3rd floor" isn't a move (§2.3).
-    private static let relativeWord = try! NSRegularExpression(pattern: #"(?i)\b(?:today|tonight|this evening|tomorrow|(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday))\b"#)
+    /// Today/tonight/tomorrow and weekdays, full or abbreviated as `moveCue` accepts them ("Thu", "Thu.", "next Mon";
+    /// F1l). Abbreviations only capitalised or in capitals: a lowercase "sat" or "sun" is usually a word, not a day.
+    private static let relativeWord = try! NSRegularExpression(pattern:
+        #"(?i)\b(?:today|tonight|this evening|tomorrow)\b|(?i)\b(?:next\s+)?(?:(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b|(?-i:Sun|Mon|Tues?|Wed|Thu(?:rs?)?|Fri|Sat|SUN|MON|TUES?|WED|THU(?:RS?)?|FRI|SAT)\b\.?)"#)
 
     static let moveCue = #"(?i)\b(?:mov(?:e|es|ed|ing)|postpon(?:e|es|ed|ing)|push(?:es|ed|ing)?(?: back)?|extend(?:s|ed|ing)?|reschedul(?:e|es|ed|ing)|delay(?:s|ed|ing)?|shift(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\d{1,2}[/.]\d{1,2}\b|\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\d{1,2}:\d{2}\b|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b|today\b|tonight\b|tomorrow\b|next\s+(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b)"#
 
@@ -671,7 +674,8 @@ extension Moodle {
                     var d: Date?, rank = 2
                     if ["today", "tonight", "this evening"].contains(w) { d = postedDay; rank = 0 }
                     else if w == "tomorrow" { d = cal.date(byAdding: .day, value: 1, to: postedDay); rank = 1 }
-                    else if let wd = days.firstIndex(where: { w.hasSuffix($0) }) {
+                    else if case let day = w.split(separator: " ").last.map({ String($0.prefix(3)) }) ?? "",
+                            let wd = days.firstIndex(where: { $0.hasPrefix(day) }) { // "thu.", "thursday", "next mon"
                         var x = cal.nextDate(after: postedDay, matching: DateComponents(weekday: wd + 1), matchingPolicy: .nextTime) ?? postedDay
                         if w.hasPrefix("next"), monWeek.isDate(x, equalTo: postedDay, toGranularity: .weekOfYear) { x = cal.date(byAdding: .day, value: 7, to: x) ?? x }
                         d = x
