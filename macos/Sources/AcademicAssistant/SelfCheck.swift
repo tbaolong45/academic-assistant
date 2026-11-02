@@ -536,6 +536,49 @@ func runSelfCheck() -> Never {
     check(dupBoard.count == 1 && Set(dupBoard.map(\.id)).count == dupBoard.count && dupBoard.first?.detail == "a",
           "board: items sharing an id are collapsed, the first one kept (got \(dupBoard.count) items)")
 
+    // MARK: - Mail progress (P4)
+
+    let oldMail = #"[{"uid":1,"subject":"S","from":"F","date":0,"body":"B"}]"#
+    check((try? JSONDecoder().decode(MailStore.self, from: Data(oldMail.utf8)))?.messages.map(\.uid) == [1],
+          "mail: an old mail.json (a plain array of messages) still decodes, so nothing is downloaded twice")
+    check(SchoolMail.toFetch(uids: [1, 2, 3, 4, 5], have: [1], seen: [2], failures: [3: 3, 4: 1]) == [4, 5],
+          "mail: toFetch skips stored and unparseable UIDs, and one that failed 3 times")
+
+    final class MailBox: @unchecked Sendable { var store = MailStore(); var saves = 0 }
+    func runDownload(_ box: MailBox, _ fetch: @escaping @Sendable (Int) async throws -> SchoolMail.Message?) {
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            await SchoolMail.download([1, 2, 3, 4, 5], into: &box.store, fetch: fetch, save: { _ in box.saves += 1 })
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 10)
+    }
+    let failedDownload = MailBox()
+    runDownload(failedDownload) { uid in
+        if uid == 3 { throw MailError.timeout }
+        return SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
+    }
+    check(failedDownload.store.messages.map(\.uid) == [1, 2, 4, 5] && failedDownload.store.failures[3] == 1 && failedDownload.saves == 5,
+          "mail: a failing fetch is counted and saved, and doesn't stop the run (got \(failedDownload.store.messages.map(\.uid)))")
+    let unreadableMail = MailBox()
+    runDownload(unreadableMail) { uid in
+        uid == 2 ? nil : SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
+    }
+    check(unreadableMail.store.seen == [2] && unreadableMail.store.messages.map(\.uid) == [1, 3, 4, 5],
+          "mail: an unparseable message goes into seen, so the next sync doesn't fetch it again")
+    let closedDownload = MailBox()
+    runDownload(closedDownload) { uid in
+        if uid == 2 { throw MailError.closed }
+        return SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
+    }
+    check(closedDownload.store.messages.map(\.uid) == [1] && closedDownload.store.failures.isEmpty && closedDownload.saves == 1,
+          "mail: a closed connection stops the run without counting a failure (got \(closedDownload.store.messages.map(\.uid)))")
+    let someMail = SchoolMail.Message(uid: 1, subject: "S", from: "F", date: .now, body: "B")
+    let unreadableNote = MailStore(messages: Array(repeating: someMail, count: 49), seen: [7])
+    let cleanNote = MailStore(messages: Array(repeating: someMail, count: 49))
+    check(unreadableNote.note == "49 school emails · 1 skipped (unreadable date)" && cleanNote.note == "49 school emails",
+          "mail: the note counts skipped-unreadable mail, and has no '·' part when nothing was skipped (got \(unreadableNote.note))")
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.

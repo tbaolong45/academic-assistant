@@ -17,7 +17,8 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | B1 | First build step of T3 (doc §7) | Builder + Test writer | per doc §7 | done |
 | U1 | Campus tokens + new course hues | Builder + Test writer | Theme.swift, Model.swift | done (checks pending) |
 | P1 | Gmail never marked read: built-in IMAP client | Builder | SchoolMail.swift | done; reviewed (docs/reviews/P1.md), 1 High → F1 |
-| F1 | Fixes from reviews R1, B1, P1 (11 items, incl. P1 send-hang High) | Builder + Test writer | see docs/tasks/F1-review-fixes.md | queued after U2, before P4 |
+| F1 | Fixes from reviews R1, B1, P1, R2 (15 items) | Builder + Test writer | see docs/tasks/F1-review-fixes.md | done (9b8a6f4); review pending |
+| P4 | Mail progress: per-message saves, retry cap, skipped-date count | Builder + Test writer | SchoolMail.swift, Store.swift | done; checks (c),(e) pending; review pending |
 | G1 | Entire + GitHub: public code repo, private checkpoints repo | Coordinator | git config, .entire/ | done: github.com/tbaolong45/academic-assistant (public), Entire mirror aws-ap-south-1 |
 
 Decisions from the user (2026-11-02):

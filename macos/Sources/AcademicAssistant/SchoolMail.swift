@@ -239,6 +239,9 @@ struct MailStore: Codable, Sendable, Equatable {
     var seen: Set<Int> = [] // fetched, but `parse` couldn't read it (no readable Date:): not fetched again
     var failures: [Int: Int] = [:] // UID → failed fetches; skipped from the 3rd on
 
+    /// "49 school emails · 1 skipped (unreadable date)": the Connect sheet's mail line.
+    var note: String { "\(messages.count) school emails" + (seen.isEmpty ? "" : " · \(seen.count) skipped (unreadable date)") }
+
     /// Keeps only what still matters: messages since `since`, and progress for UIDs the last search still returned.
     mutating func prune(since: Date, uids: Set<Int>) {
         messages = messages.filter { $0.date > since }

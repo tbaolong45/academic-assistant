@@ -217,7 +217,7 @@ import Foundation
             if !start.messages.isEmpty { Notifier.post(fresh.map { (title: "✉︎ \($0.from)", body: $0.subject) }) } // not on the first download
             mail = updated
             save { try MailCache.save(mail) }
-            mailNote = "\(mail.messages.count) school emails" + (mail.seen.isEmpty ? "" : " · \(mail.seen.count) skipped (unreadable date)")
+            mailNote = mail.note
         } catch { mailNote = error.localizedDescription } // never the password
         subjects = summarized(labeled(SchoolMail.merge(mail.messages, into: subjects), known), titles)
     }
