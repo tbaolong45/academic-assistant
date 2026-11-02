@@ -1137,6 +1137,109 @@ func runSelfCheck() -> Never {
           && Summarizer.prune(hiddenTitle, to: [hiddenSubject]).count == 1,
           "summarizer: a hidden cluster member keeps its paid title (prune drops nothing it would re-buy)")
 
+    // MARK: - PDF cache & bounded parallelism (B7)
+
+    var pdfLoads = 0
+    let pdfKey = PDFCache.Key(path: "/tmp/aa-fixture-1.pdf", size: 10, modified: 100)
+    let pdfEntry1 = PDFCache.entry(pdfKey) { pdfLoads += 1; return "Quiz on 10 Oct" }
+    let pdfEntry2 = PDFCache.entry(pdfKey) { pdfLoads += 1; return "should not be read" }
+    let pdfEntry3 = PDFCache.entry(PDFCache.Key(path: "/tmp/aa-fixture-1.pdf", size: 10, modified: 200)) {
+        pdfLoads += 1
+        return "Final on 1 Nov"
+    }
+    check(pdfEntry1?.text == "Quiz on 10 Oct" && pdfEntry1?.found.count == 1
+          && pdfEntry2?.text == "Quiz on 10 Oct" && pdfLoads == 2 && pdfEntry3?.text == "Final on 1 Nov",
+          "b7: PDFCache reads a file once, serves the stored entry, and re-reads after its modified time changes (loads \(pdfLoads))")
+
+    final class LoadBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current = 0
+        private(set) var peak = 0
+        func enter() { lock.lock(); current += 1; peak = max(peak, current); lock.unlock() }
+        func leave() { lock.lock(); current -= 1; lock.unlock() }
+    }
+    final class MapResult: @unchecked Sendable { var values: [Int] = [] }
+    let loadBox = LoadBox(), mapResult = MapResult()
+    let mapDone = DispatchSemaphore(value: 0)
+    Task {
+        mapResult.values = (try? await boundedMap(Array(0..<10), limit: 4) { i in
+            loadBox.enter()
+            try? await Task.sleep(nanoseconds: UInt64.random(in: 2_000_000...25_000_000))
+            loadBox.leave()
+            return i * 10
+        }) ?? []
+        mapDone.signal()
+    }
+    _ = mapDone.wait(timeout: .now() + 30)
+    check(mapResult.values == (0..<10).map { $0 * 10 } && loadBox.peak <= 4 && loadBox.peak > 1,
+          "b7: boundedMap keeps input order and never runs more than 4 at once (peak \(loadBox.peak))")
+
+    // MARK: - Cue, range and PDF-mark fixes (F1h)
+
+    let cueTable: [(String, Bool)] = [
+        ("…approval to reschedule our Calculus 1 classes to Friday, 9 October 2026", true),
+        ("The quiz on 20 Oct has moved to room 3", false),
+        ("Quiz moved to week 9", false),
+        ("moved to room 3B", false),
+        ("moved to the 3rd floor", false),
+        ("Lab on Tuesday moved to the 3rd of December", true),
+        ("the rescheduled lab is still on Tuesday, next to the library", false),
+        ("moved from 20 Oct to 1 Nov", true),
+        ("We will move to the new room on Tuesday", false),
+        ("extended to 4 Nov", true),
+        ("moved to the 1st of November", true),
+        ("postponed until next Monday", true),
+        ("changed to Wednesday 3 pm", true),
+        ("The exam is pushing to 12/11", true),
+        ("Quiz delays to 3pm", true),
+        ("We are extending the deadline to Dec 3", true),
+        ("The lab shifts to Thu", true),
+        ("move tomorrow's office hours to today", true),
+        ("Submission moved to 23.11", true),
+        ("class moved to 10:30", true),
+        ("grades changed to marks", false),
+        ("moved to Satisfactory", false),
+        ("changed to the monitor room", false),
+    ]
+    let cueWrong = cueTable.filter { ($0.0.range(of: Moodle.moveCue, options: .regularExpression) != nil) != $0.1 }
+    check(cueWrong.isEmpty, "cluster: the 23 §2.3 cue sentences classify correctly (wrong: \(cueWrong.map(\.0)))")
+    let roomMove = Moodle.mentionedDates("The quiz on 20 Oct has moved to room 3", posted: b3At(2026, 10, 10),
+                                         source: .announcement, via: .news)
+    check(roomMove.count == 1 && b4Is(roomMove[0].date, 2026, 10, 20) && roomMove[0].moved == nil,
+          "cluster: 'moved to room 3' keeps its only date and sets no move (second net)")
+    let movedToToday = Moodle.mentionedDates("We will move tomorrow's office hours to today at 3 pm",
+                                             posted: b3At(2026, 10, 26), source: .announcement, via: .news)
+    check(movedToToday.count == 1 && movedToToday[0].moved == true
+          && b3Cal.dateComponents([.year, .month, .day, .hour], from: movedToToday[0].date)
+          == DateComponents(year: 2026, month: 10, day: 26, hour: 15),
+          "cluster: 'move tomorrow's … to today at 3 pm' keeps only today, moved (got \(movedToToday.count))")
+    check(Moodle.namedDays("Dec 1-2 National Day") == ["12/1", "12/2"], "dates: 'Dec 1-2' names both days")
+    check(Moodle.range("Dec 1-2 National Day")?.from.day == 1 && Moodle.range("Dec 1-2 National Day")?.to.day == 2,
+          "dates: 'Dec 1-2' parses as a 1→2 Dec range")
+    check(cluster([b4("Dec 1-2 National Day", b3At(2026, 12, 2), via: .coursePage, ref: "label"),
+                   b4("Dec 1 National Day", b3At(2026, 12, 1), via: .pdf, ref: "s.pdf")]).count == 1,
+          "cluster: a month-first range counts as the same day")
+    check(Moodle.range("1 Oct – 15 Dec") != nil, "dates: an explicit range form parses (the span rule lives in cluster)")
+    check(cluster([b4("1 Oct – 15 Dec National Day", b3At(2026, 12, 15), via: .coursePage, ref: "label"),
+                   b4("Dec 1 National Day", b3At(2026, 12, 1), via: .pdf, ref: "s.pdf")]).count == 2,
+          "cluster: a 75-day range absorbs nothing")
+    check(cluster([b4("Quiz 1 on 1 Dec", b3At(2026, 12, 1), via: .pdf, ref: "s.pdf"),
+                   b4("Quiz 1 on 5 Dec", b3At(2026, 12, 5), via: .pdf, ref: "s2.pdf")]).count == 2,
+          "cluster: two separate dates in a PDF title are not a range")
+    let p9DedupedAssessment = Assessment(id: "gi9", name: "Quiz 9", type: .quiz, date: b3At(2026, 11, 20), weight: 5, raw: nil, topics: [])
+    let p9DedupedEvent = CourseEvent(title: "Quiz 9 closes", date: b3At(2026, 11, 22), source: .announcement,
+                                     detail: "Quiz 9 closes on 22 November", origin: "Quiz 9 closes on 22 November", via: .news)
+    let p9Deduped = Subject(id: "p9d", name: "P9D", code: "P9D", hue: .green, assessments: [p9DedupedAssessment],
+                            assignments: [], materials: [], announcements: [], events: [p9DedupedEvent])
+    check(Summarizer.targets([p9Deduped], board: boardItems([p9Deduped]), titles: [:],
+                             window: b3At(2026, 10, 1)...b3At(2026, 12, 1)).isEmpty,
+          "summarizer: an event deduped behind an assessment within 7 days gets no request")
+    let pdfMarkKey = BoardState.key("t:s/pdf/-/final/0")
+    let pdfMark = [pdfMarkKey: Mark(state: .done, itemDate: b3Now.addingTimeInterval(-40 * 86_400), at: b3Now, pdf: true)]
+    check(pruneMarks(pdfMark, live: [], now: b3Now, keepPDF: true).count == 1
+          && pruneMarks(pdfMark, live: [], now: b3Now).isEmpty,
+          "marks: a PDF date's mark survives a run where the file couldn't be read")
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.

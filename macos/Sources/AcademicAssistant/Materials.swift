@@ -60,14 +60,15 @@ enum MaterialStore {
         PDFCache.Key(path: url.path(percentEncoded: false), size: f.size, modified: f.modified)
     }
 
-    /// Dates written in every downloaded PDF (syllabus, schedules, briefs, slides…), per subject id. Slow: run off the main thread.
-    static func documentEvents(_ subjects: [Subject]) -> [String: [CourseEvent]] {
-        var out: [String: [CourseEvent]] = [:]
+    /// Dates written in every downloaded PDF (syllabus, schedules, briefs, slides…), per subject id, and how many PDFs gave
+    /// no text (not downloaded, over 300 MB, or unreadable): their dates may be missing (F1h #5). Slow: off the main thread.
+    static func documentEvents(_ subjects: [Subject]) -> (dates: [String: [CourseEvent]], skipped: Int) {
+        var out: [String: [CourseEvent]] = [:], skipped = 0
         for s in subjects {
             for m in s.materials {
                 for f in m.files ?? [] where f.name.lowercased().hasSuffix(".pdf") {
                     let url = localURL(s, m, f)
-                    guard isSaved(url, f), let entry = PDFCache.entry(key(url, f), load: { PDFDocument(url: url)?.string }) else { continue }
+                    guard isSaved(url, f), let entry = PDFCache.entry(key(url, f), load: { PDFDocument(url: url)?.string }) else { skipped += 1; continue }
                     let posted = PDFCache.posted(f.modified)
                     out[s.id, default: []] += entry.found
                         // skip Moodle's download stamp ("…203.0.113.7 on Wed, 09 Sep 2026 06:48 UTC") and repeats across pages
@@ -79,7 +80,7 @@ enum MaterialStore {
                 }
             }
         }
-        return out.mapValues { evs in var seen = Set<String>(); return evs.filter { seen.insert("\($0.date.timeIntervalSince1970)|\($0.title)").inserted } }
+        return (out.mapValues { evs in var seen = Set<String>(); return evs.filter { seen.insert("\($0.date.timeIntervalSince1970)|\($0.title)").inserted } }, skipped)
     }
 
     /// Passages in a subject's downloaded PDFs that talk about a deadline (a line with one of its words, and at least two of them

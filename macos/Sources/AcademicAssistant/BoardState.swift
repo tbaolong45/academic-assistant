@@ -9,6 +9,7 @@ struct Mark: Codable, Equatable, Sendable {
     var until: Date? = nil // snoozed: back at this time
     var itemDate: Date // the item's date when marked: a move of more than 12 h brings a dismissed or snoozed item back (D4)
     var at: Date
+    var pdf: Bool? = nil // its cluster has a PDF date: kept while a PDF can't be read (F1h #5)
 }
 
 typealias Marks = [String: Mark]
@@ -45,8 +46,10 @@ func applyMarks(_ items: [Deadline], _ marks: Marks, now: Date) -> [Deadline] {
 }
 
 /// After a sync: drops marks whose item is gone from every source (`live` = hashed keys) and was dated over 30 days ago.
-func pruneMarks(_ marks: Marks, live: Set<String>, now: Date) -> Marks {
-    marks.filter { live.contains($0.key) || $0.value.itemDate >= now.addingTimeInterval(-30 * 86_400) } // exactly 30 days is kept
+/// `keepPDF`: some PDF gave no text this sync, so a mark on a PDF date may only look gone (F1h #5).
+func pruneMarks(_ marks: Marks, live: Set<String>, now: Date, keepPDF: Bool = false) -> Marks {
+    marks.filter { live.contains($0.key) || $0.value.itemDate >= now.addingTimeInterval(-30 * 86_400) // exactly 30 days is kept
+        || keepPDF && $0.value.pdf == true }
 }
 
 /// The snooze menu: tomorrow 08:00, next Monday 08:00 (on a Monday, the one after), and 2 days before it's due (while

@@ -200,7 +200,10 @@ Clustering runs per subject over all items: union-find on pairs, with n ≈ a fe
   3. **Supersede.** The one exception to rule 2 is the existing supersede case: the newer-posted member has a stated move cue, up to 30 days.
   4. **No bridging.** Every two non-anchor members of one cluster must satisfy rule 2 or 3 *directly*. A union that would break this is refused, like the number-set and ref guards. So no third item can chain two calendar events, two days or two dates together, through a news post or through an anchor.
   5. The day-set, ref, calendar-ref and number guards stay as a second net.
-  6. **Ranges.** An item whose title names a range of days (`namedDays` gives several days, e.g. "1-2 Dec" → {1 Dec, 2 Dec}, span ≤ 7 days) counts as "same day" on any day in it. So the course-page "1-2 Dec National Day" and the PDF row "Dec 1 — National Day" merge.
+  6. **Ranges** (F1h, narrowed after the F1g review). Only course-page and PDF items, and only an explicit range in the item's own title, spanning ≤ 7 days, count as "same day" on any day in it.
+     - Range forms: "1-2 Dec", "Dec 1-2", "1 Dec – 3 Dec" or "Dec 1 - Dec 3" (with -, – or —), and "1 Dec to/until/till/through 3 Dec".
+     - Two separate dates are not a range. "Quiz 1 on 1 Dec, Quiz 2 on 5 Dec" gives no range.
+     - Posts and mail never use ranges, because their "from X to Y" is usually a move. So the course-page "1-2 Dec National Day" and the PDF row "Dec 1 — National Day" merge.
 - Against the existing checks:
   - B4 (a), (f), (h) are anchor pairs; (d) is a supersede; (b), (c), (e), (g) are unaffected.
   - F1e's cases all hold.
@@ -214,12 +217,16 @@ TED example: "TED-Talk Script (8%)" gives {ted, talk, script}. "TED Script due 1
 
 `Moodle.mentionedDates` checks the sentence around each date for a move cue:
 
-`(?i)\b(mov(?:e|ed|ing)|postpon(?:e|ed|ing)|push(?:ed)?(?: back)?|extend(?:ed)?|reschedul(?:e|ed|ing)|delay(?:ed)?|shift(?:ed)?|chang(?:e|ed))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d|(?:mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow|tonight|next)[a-z]*\b)`
+```
+(?i)\b(?:mov(?:e|es|ed|ing)|postpon(?:e|es|ed|ing)|push(?:es|ed|ing)?(?: back)?|extend(?:s|ed|ing)?|reschedul(?:e|es|ed|ing)|delay(?:s|ed|ing)?|shift(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\d{1,2}[/.]\d{1,2}\b|\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\d{1,2}:\d{2}\b|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b|today\b|tonight\b|tomorrow\b|next\s+(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b)
+```
 
-(Revised in F1g:
-- Verb stems now also match the base and -ing forms, as in "approval to reschedule our classes to Fri 9 Oct".
-- The "to" must be followed by a date word, so "moved to LH1" and "next to the library" are no longer cues.
-- On the 1,901 cached sentences, 5 change: 2 real moves gained and 3 false cues removed.)
+(Revised in F1h, after the F1g review:
+- Every form of each verb (-s, -ed, -ing).
+- "to/until/till" must be followed by a date *shape*: day + month, d/m or d.m, a clock time, a month name, a weekday, today/tonight/tomorrow, or "next <weekday>". A bare number never counts, so "moved to room 3", "moved to week 9" and "moved to the 3rd floor" are not cues.
+- On the 1,901 cached sentences (Moodle and mail), 2 contain a cue, the same 2 as with F1g's regex.)
+
+- **Second net (F1h):** dates before the cue are dropped only when at least one date was found *after* the cue. Otherwise the cue is ignored: all dates stay, and `moved` stays nil. A cue can never make a sentence lose its only date.
 
 - If the cue matches and the date follows it, set `moved = true`.
 - Dates in the same sentence before the cue ("moved **from 20 Oct** to 1 Nov") are dropped.

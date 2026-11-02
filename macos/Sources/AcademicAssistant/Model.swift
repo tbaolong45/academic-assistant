@@ -602,18 +602,20 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
     // else merges only on the same local day or within 12 h, unless the newer one supersedes (a stated move, ≤ 30 days).
     let anchor = items.map { [.moodleActivity, .syllabus].contains($0.resolvedVia) }
     var loose = items.indices.map { anchor[$0] ? [] : [$0] } // per cluster root: its non-anchor members
-    // F1g rule 6: a title naming a range of up to 7 days ("1-2 Dec") is on every day of it. Own title only.
+    // §2.2 rule 6 (F1h): a course-page or PDF item whose own title has an explicit range of up to 7 days ("1-2 Dec",
+    // "1 Dec – 3 Dec") is on every day of it. Posts and mail never get ranges; two separate dates are not a range.
     let cal = Calendar.current
     let onDays: [Set<Date>] = items.map { d in
         let own = cal.startOfDay(for: d.date), year = cal.component(.year, from: d.date)
-        let named = Moodle.namedDays(d.title).compactMap { md -> Date? in
-            let p = md.split(separator: "/").compactMap { Int($0) }
-            guard p.count == 2 else { return nil } // weekdays don't make a range
-            return [year - 1, year, year + 1].compactMap { cal.date(from: DateComponents(year: $0, month: p[0], day: p[1])) }
+        func day(_ md: (month: Int, day: Int)) -> Date? { // the year that puts it nearest the item's date
+            [year - 1, year, year + 1].compactMap { cal.date(from: DateComponents(year: $0, month: md.month, day: md.day)) }
                 .min { abs($0.timeIntervalSince(own)) < abs($1.timeIntervalSince(own)) }
         }
-        guard named.count >= 2, let lo = named.min(), let hi = named.max(), hi.timeIntervalSince(lo) <= 7 * 86_400 else { return [own] }
-        return Set(named).union([own])
+        guard [.coursePage, .pdf].contains(d.resolvedVia), let r = Moodle.range(d.title), let lo = day(r.from), let hi = day(r.to),
+              lo <= hi, hi.timeIntervalSince(lo) <= 7 * 86_400 else { return [own] }
+        var out: Set<Date> = [own], x = lo
+        while x <= hi { out.insert(x); x = cal.date(byAdding: .day, value: 1, to: x) ?? hi.addingTimeInterval(1) }
+        return out
     }
     var parent = Array(items.indices)
     var nums = numbers, activity = items.map { $0.resolvedVia == .moodleActivity } // per cluster root

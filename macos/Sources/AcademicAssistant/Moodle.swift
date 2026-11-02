@@ -531,13 +531,35 @@ extension Moodle {
             if let d = Int(m.1), let mo = month(String(m.2)) { out.insert("\(mo)/\(d)") }
         }
         for m in monthDay.matches(in: text, range: all) { if let d = Int(g(m, 2)), let mo = month(g(m, 1)) { out.insert("\(mo)/\(d)") } }
+        if let r = range(text) { out.formUnion(["\(r.from.month)/\(r.from.day)", "\(r.to.month)/\(r.to.day)"]) } // "Dec 1-2": its 2 Dec too
         return out
     }
 
-    /// A sentence saying a date moved: "postponed to", "pushed back until", "moved from 20 Oct to". Base, past and -ing
-    /// forms ("approval to reschedule our classes to Fri 9 Oct"); "to/until" must be followed by a date word, so "changed
-    /// to the new room" isn't a move (deadline-priority.md §2.3).
-    static let moveCue = #"(?i)\b(mov(?:e|ed|ing)|postpon(?:e|ed|ing)|push(?:ed)?(?: back)?|extend(?:ed)?|reschedul(?:e|ed|ing)|delay(?:ed)?|shift(?:ed)?|chang(?:e|ed))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d|(?:mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow|tonight|next)[a-z]*\b)"#
+    /// The first and last day of an explicit range in `title`: "1-2 Dec", "Dec 1-2", "1 Dec – 3 Dec", "Dec 1 - Dec 3",
+    /// "1 Dec to 3 Dec" (to/until/till/through). Two separate dates are not a range (§2.2 rule 6). As (month, day).
+    static func range(_ title: String) -> (from: (month: Int, day: Int), to: (month: Int, day: Int))? {
+        let ord = #"(?:st|nd|rd|th)?"#, dash = #"\s*(?:[-–—]|\s(?:to|until|till|through)\s)\s*"#, short = #"\s*[-–—]\s*"#
+        // Each form with the group order of (from month, from day, to month, to day); a nil month repeats the first one.
+        let forms: [(String, [Int?])] = [
+            (#"(?i)\b(\d{1,2})"# + ord + #"\s+"# + mon + dash + #"(\d{1,2})"# + ord + #"\s+"# + mon + #"\b"#, [2, 1, 4, 3]), // 1 Dec – 3 Dec
+            (#"(?i)\b"# + mon + #"\.?\s+(\d{1,2})"# + ord + dash + mon + #"\.?\s+(\d{1,2})\b"#, [1, 2, 3, 4]),             // Dec 1 - Dec 3
+            (#"(?i)\b(\d{1,2})"# + ord + short + #"(\d{1,2})"# + ord + #"\s+"# + mon + #"\b"#, [3, 1, nil, 2]),               // 1-2 Dec
+            (#"(?i)\b"# + mon + #"\.?\s+(\d{1,2})"# + ord + short + #"(\d{1,2})\b(?![/.:])"#, [1, 2, nil, 3]),                // Dec 1-2
+        ]
+        let ns = title as NSString
+        for (pattern, at) in forms {
+            guard let m = try? NSRegularExpression(pattern: pattern).firstMatch(in: title, range: NSRange(location: 0, length: ns.length)) else { continue }
+            let g = at.map { $0.map { ns.substring(with: m.range(at: $0)) } }
+            func month(_ s: String?) -> Int? { s.flatMap { s in months.firstIndex { s.lowercased().hasPrefix($0) }.map { $0 + 1 } } }
+            guard let m1 = month(g[0]), let d1 = g[1].flatMap({ Int($0) }), let d2 = g[3].flatMap({ Int($0) }) else { continue }
+            return ((m1, d1), (month(g[2]) ?? m1, d2))
+        }
+        return nil
+    }
+
+    /// A sentence saying a date moved: "postponed to", "pushed back until", "moved from 20 Oct to 1 Nov". Every verb form;
+    /// "to/until/till" must be followed by a date shape, so "moved to room 3" or "to the 3rd floor" isn't a move (§2.3).
+    static let moveCue = #"(?i)\b(?:mov(?:e|es|ed|ing)|postpon(?:e|es|ed|ing)|push(?:es|ed|ing)?(?: back)?|extend(?:s|ed|ing)?|reschedul(?:e|es|ed|ing)|delay(?:s|ed|ing)?|shift(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\d{1,2}[/.]\d{1,2}\b|\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\d{1,2}:\d{2}\b|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b|today\b|tonight\b|tomorrow\b|next\s+(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b)"#
 
     static func mentionedDates(_ text: String, posted: Date, source: CourseEvent.Source, strict: Bool = false, via: Origin? = nil) -> [CourseEvent] {
         let cal = Calendar.current
@@ -574,30 +596,32 @@ extension Moodle {
             }
             // Relative words are resolved against the post date: today/tonight, tomorrow, a weekday ("Tuesday" = the next one
             // after the post; "next Tuesday" = the one in the following week).
-            var relative: Date?
+            var relative: Date?, word = ""
             if found.isEmpty && !strict { // relative words only make sense in a dated post, not in reused slides
                 let low = sentence.lowercased(), postedDay = cal.startOfDay(for: posted)
                 let days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
-                if low.range(of: #"\b(today|tonight|this evening)\b"#, options: .regularExpression) != nil { relative = postedDay }
-                else if low.range(of: #"\btomorrow\b"#, options: .regularExpression) != nil { relative = cal.date(byAdding: .day, value: 1, to: postedDay) }
+                if low.range(of: #"\b(today|tonight|this evening)\b"#, options: .regularExpression) != nil { relative = postedDay; word = #"\b(today|tonight|this evening)\b"# }
+                else if low.range(of: #"\btomorrow\b"#, options: .regularExpression) != nil { relative = cal.date(byAdding: .day, value: 1, to: postedDay); word = #"\btomorrow\b"# }
                 else if let m = low.firstMatch(of: /\b(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/),
                         let wd = days.firstIndex(of: String(m.2)) {
                     var d = cal.nextDate(after: postedDay, matching: DateComponents(weekday: wd + 1), matchingPolicy: .nextTime) ?? postedDay
                     var monWeek = cal; monWeek.firstWeekday = 2
                     if m.1 != nil, monWeek.isDate(d, equalTo: postedDay, toGranularity: .weekOfYear) { d = cal.date(byAdding: .day, value: 7, to: d) ?? d }
                     relative = d
+                    word = #"\b(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b"#
                 }
                 if let r = relative {
                     let c = cal.dateComponents([.year, .month, .day], from: r)
-                    let at = ns.range(of: #"(?i)\b(today|tonight|this evening|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b"#,
-                                      options: .regularExpression).location
+                    let at = ns.range(of: "(?i)" + word, options: .regularExpression).location // the word used, for the cue check
                     found.append((c.day!, c.month!, c.year!, at))
                 }
             }
             guard !found.isEmpty else { continue }
             // "Moved from 20 Oct to 1 Nov" (§2.3): the dates after the cue are the new ones; those before it are the old ones.
             let cue = ns.range(of: Self.moveCue, options: .regularExpression)
-            let cueEnd = cue.location == NSNotFound ? nil : cue.location + cue.length
+            var cueEnd = cue.location == NSNotFound ? nil : cue.location + cue.length
+            // Second net (§2.3): with no date at or after the cue, ignore it, so a cue can never make a date vanish.
+            if let end = cueEnd, !found.contains(where: { (1...31).contains($0.day) && $0.at >= end }) { cueEnd = nil }
             var hour = 23, minute = 59 // a date with no time is a "by the end of that day" deadline
             func hasDate(_ s: String) -> Bool {
                 let r = NSRange(s.startIndex..., in: s)

@@ -147,15 +147,17 @@ enum Summarizer {
     /// splits, the post is titled on the next run. Prune still keeps titles of hidden members, so a re-split costs nothing.
     static func targets(_ subjects: [Subject], board: [BoardItem], titles: [String: Summary],
                         window: ClosedRange<Date>) -> [(course: String, event: CourseEvent)] {
-        var hidden = Set<String>()
-        for d in board { // members behind an anchor (a Moodle activity or assessment) show its title, not their own
+        var hidden = Set<String>(), onBoard = Set<String>() // only events that reach a card, as a winner or a member (F1h #4)
+        for d in board {
+            onBoard.insert(d.id)
+            onBoard.formUnion(d.alsoIn.map(\.id)) // members behind an anchor (a Moodle activity or assessment) show its title, not their own
             if d.hidden { hidden.insert(d.id) }
             if d.hidden || [.moodleActivity, .syllabus].contains(d.resolvedVia) { hidden.formUnion(d.alsoIn.map(\.id)) }
         }
         var seen = Set<String>()
         return subjects.flatMap { s in (s.events ?? []).map { (s, $0) } }
             .filter { s, e in window.contains(e.date) && e.kind?.isDated != false && hasContent(e.title) && titles[id(e)] == nil
-                && !hidden.contains(Deadline.eventID(s, e)) && seen.insert(id(e)).inserted }
+                && onBoard.contains(Deadline.eventID(s, e)) && !hidden.contains(Deadline.eventID(s, e)) && seen.insert(id(e)).inserted }
             .map { (course: $0.0.name, event: $0.1) }
     }
 

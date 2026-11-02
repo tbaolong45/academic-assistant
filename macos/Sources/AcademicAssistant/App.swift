@@ -8,7 +8,7 @@ struct AcademicAssistantApp: App {
         if CommandLine.arguments.contains("--self-check") { runSelfCheck() }
         if CommandLine.arguments.contains("--doc-check") { // dates found in downloaded PDFs, from the cached sync (no network)
             let t0 = Date.now, subjects = MoodleCache.load()?.subjects ?? []
-            let found = MaterialStore.documentEvents(subjects)
+            let found = MaterialStore.documentEvents(subjects).dates
             for s in subjects { print("\(s.code): \(found[s.id]?.count ?? 0) dates; e.g. \(found[s.id]?.prefix(2).map { $0.title.prefix(70) } ?? [])") }
             if let i = CommandLine.arguments.firstIndex(of: "--doc-check"), i + 1 < CommandLine.arguments.count { // optional filter text
                 let q = CommandLine.arguments[i + 1].lowercased()

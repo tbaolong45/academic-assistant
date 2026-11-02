@@ -38,6 +38,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     private var generation = 0
     private var base: [Subject] = [] // the last Moodle sync (or its cache)
     private var docs: [String: [CourseEvent]] = [:] // dates in downloaded PDFs, by subject id
+    private var pdfSkipped = 0 // PDFs that gave no text in the last scan: their marks aren't pruned
     @Published private(set) var hasJevKey = Keychain.read(host: Jev.account) != nil
     @Published private(set) var classifierNote: String? // progress or the last classifier error (never the key)
     private var known = KindCache.load() // Jev answers by text hash
@@ -85,14 +86,15 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         if state == nil, let old = d.mark { // restore: also the keys of members that have left the cluster since (F1g #6)
             marks = marks.filter { $0.value != old }
         }
-        let m = state.map { Mark(state: $0, until: until, itemDate: d.date, at: .now) }
+        let pdf = ([d] + d.alsoIn).contains { $0.resolvedVia == .pdf } ? true : nil
+        let m = state.map { Mark(state: $0, until: until, itemDate: d.date, at: .now, pdf: pdf) }
         for k in keys { marks[k] = m }
         save { try BoardState.save(marks) }
         applyBoardMarks()
     }
 
     private func pruneBoardMarks() {
-        let kept = pruneMarks(marks, live: Set(rawBoard.flatMap(\.clusterKeys).map(BoardState.key)), now: .now)
+        let kept = pruneMarks(marks, live: Set(rawBoard.flatMap(\.clusterKeys).map(BoardState.key)), now: .now, keepPDF: pdfSkipped > 0)
         if kept.count != marks.count { marks = kept; save { try BoardState.save(marks) } }
     }
 
@@ -184,7 +186,8 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         let current = subjects
         let found = await Task.detached(priority: .utility) { MaterialStore.documentEvents(current) }.value
         guard Self.isCurrent(generation: gen, current: generation) else { return false }
-        docs = found
+        docs = found.dates
+        pdfSkipped = found.skipped
         publish()
         classify() // last steps of every sync: everything new is on hand now
         summarize()
