@@ -70,7 +70,7 @@ enum MaterialStore {
                         // within ~9 months of now: chart axes ("07 Sep 35") and cited years (1979, 2025) aren't this semester
                         .filter { abs($0.date.timeIntervalSinceNow) < 270 * 86_400 }
                         .map { CourseEvent(title: $0.title, date: $0.date, source: .document, // the dated line itself; the file is named in detail
-                                           detail: "From “\(m.title)” (\(f.name)): \($0.detail ?? "")") }
+                                           detail: "From “\(m.title)” (\(f.name)): \($0.detail ?? "")", via: .pdf, posted: posted, ref: f.url) }
                 }
             }
         }

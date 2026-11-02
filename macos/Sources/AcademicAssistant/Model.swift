@@ -46,6 +46,7 @@ struct AssignmentItem: Hashable, Sendable {
     enum Status: String, Sendable { case submitted = "Submitted", open = "Open" }
     let title: String, due: Date, status: Status
     var details: String? = nil // the teacher's instructions (assignment description), plain text
+    var moodleID: Int? = nil // Assign.id: a stable identity (nil in caches from before B2)
 }
 
 /// "TED-Talk Script (8%)" / "Critical Writing - Final Paper - 14%" → 8 / 14; nil if the title names no percentage.
@@ -64,6 +65,60 @@ struct CourseEvent: Hashable, Sendable, Codable {
     var origin: String? = nil // the whole text the date was found in (announcement, message, course-page note): summarizer input
     var summary: Summary? = nil // AI title, once made and checked
     var announcement: String? = nil // `Announcement.key` of the post the date was found in
+    var via: Origin? = nil // where it was found (nil in caches from before B2: read `resolvedVia`)
+    var posted: Date? = nil // when the post, mail or file it came from was written
+    var moved: Bool? = nil // the text says the date moved ("postponed to 1 Nov"): set by B4
+    var ref: String? = nil // stable source id: Moodle calendar event id, ICS UID, file url or material title
+
+    var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: origin) }
+}
+
+/// Where a dated item came from, finer than `CourseEvent.Source`. Ranking, identity keys, filters and `isPDFDate`
+/// read `resolvedVia`, never `via` itself, so a nil never reaches them.
+enum Origin: String, Codable, Sendable, CaseIterable {
+    case moodleActivity, moodleCalendar, outlookCalendar, news, message, mail, coursePage, syllabus, pdf
+
+    /// High wins (1 = highest): Moodle is where work is submitted; PDFs are the least specific.
+    var rank: Int {
+        switch self {
+        case .moodleActivity: 1
+        case .moodleCalendar: 2
+        case .outlookCalendar: 3
+        case .news, .message, .mail: 4 // one tier: the newest post wins inside it
+        case .coursePage: 5
+        case .syllabus: 6
+        case .pdf: 7
+        }
+    }
+
+    /// For items saved before B2 (no `via`): nil source = a Moodle activity.
+    static func inferred(source: CourseEvent.Source?, detail: String?, text: String?) -> Origin {
+        switch source {
+        case nil: .moodleActivity
+        case .calendar: .moodleCalendar
+        case .outlook: .outlookCalendar
+        case .announcement: (text ?? "").hasPrefix("✉︎") ? .mail : .news
+        case .document: (detail ?? "").hasPrefix("On the course page") ? .coursePage : .pdf
+        }
+    }
+}
+
+/// Stable identity of each event (deadline-priority.md §3.1), parallel to `events`. It never contains the date, so it
+/// survives a date change; `n` counts same-keyword dates in one source by date order, over all of a subject's events
+/// (never just the board window).
+func memberKeys(_ events: [CourseEvent], subject: String) -> [String] {
+    let skip: Set = ["deadline", "submit", "submitted"]
+    var count: [String: Int] = [:], out = Array(repeating: "", count: events.count)
+    for i in events.indices.sorted(by: { (events[$0].date, $0) < (events[$1].date, $1) }) {
+        let e = events[i], via = e.resolvedVia
+        if via == .moodleCalendar, let ref = e.ref { out[i] = "c:\(ref)"; continue }
+        if via == .outlookCalendar, let ref = e.ref { out[i] = "o:\(ref)"; continue }
+        let words = keywords(mainPoint(e.title)).subtracting(skip).sorted().joined(separator: ",")
+        let base = "t:\(subject)/\(via.rawValue)/\(e.ref ?? e.announcement ?? "-")/\(words)"
+        out[i] = "\(base)/\(count[base, default: 0])"
+        count[base, default: 0] += 1
+    }
+    return out
 }
 
 struct Material: Hashable, Sendable {
@@ -112,6 +167,9 @@ struct Announcement: Hashable, Sendable {
     let title: String, source: Source, from: String, date: Date
     var body: String? = nil // full message text
     var kind: ItemKind? = nil // Jev's label, once classified
+    var modified: Date? = nil // last edit (Moodle `timemodified`); nil when unknown
+    /// When it was last written: an edited post counts from its edit. `date` (shown in the list) stays the creation date.
+    var posted: Date { max(date, modified ?? date) }
     /// Identifies the post, so a deadline found in it can open it.
     var key: String { "\(title)|\(date.timeIntervalSince1970)" }
 }
@@ -219,6 +277,11 @@ struct Deadline: Identifiable, Sendable {
     var summary: Summary? = nil // DeepSeek's title, if Jev accepted it
     var announcement: String? = nil // the post it came from: clicking opens it in the course's Announcements tab
     var headlineCache: String? = nil // set by `boardItems`, so mainPoint's regexes run once per data change, not per redraw
+    var memberKey = "" // stable identity (`memberKeys`), set by `deadlines()`; unlike `id` it has no date in it
+    var via: Origin? = nil
+    var posted: Date? = nil
+
+    var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: nil) }
 
     /// Higher = do sooner: weight ÷ days left (ungraded items count as 2%, nothing closer than 6h).
     func priority(now: Date = .now) -> Double {
@@ -242,8 +305,8 @@ func boardItems(_ subjects: [Subject]) -> [BoardItem] {
 }
 
 /// A date read from a downloaded PDF (MaterialStore.documentEvents), as opposed to course-page text, which every Moodle
-/// sync brings again. Both are `.document` events (B2's Origin will tell them apart properly).
-func isPDFDate(_ e: CourseEvent) -> Bool { e.source == .document && !(e.detail ?? "").hasPrefix("On the course page") }
+/// sync brings again.
+func isPDFDate(_ e: CourseEvent) -> Bool { e.resolvedVia == .pdf }
 
 /// `subjects` with their PDF dates replaced by `found` (by subject id). Course-page dates stay, so this is idempotent.
 func withPDFDates(_ subjects: [Subject], _ found: [String: [CourseEvent]]) -> [Subject] {
@@ -267,20 +330,26 @@ private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadli
                 && !(a.id.hasPrefix("syllabus/") && a.date < .now) } // a syllabus quiz that already happened is awaiting its mark, not overdue
             .map { Deadline(id: "\(s.id)/\($0.id)", subject: s, title: $0.name, date: $0.date,
                             weight: $0.exactWeight == 0 ? nil : Int($0.share.rounded()), // 0 = the quiz currently dropped from "best 4"
-                            kind: [.quiz, .midterm, .final, .miniExam].contains($0.type) ? .exam : .deadline) }
+                            kind: [.quiz, .midterm, .final, .miniExam].contains($0.type) ? .exam : .deadline,
+                            memberKey: "g:\(s.id)/\($0.id)", via: $0.id.hasPrefix("syllabus/") ? .syllabus : .moodleActivity) }
         let other = s.assignments
             .filter { a in a.status == .open && a.due >= start && a.due < end && !s.assessments.contains { sameItem(a.title, $0.name) } }
             .map { Deadline(id: "\(s.id)/task/\($0.title)", subject: s, title: $0.title, date: $0.due, weight: percentInTitle($0.title),
-                            detail: $0.details, kind: .deadline) }
+                            detail: $0.details, kind: .deadline,
+                            memberKey: "a:" + ($0.moodleID.map(String.init) ?? "\(s.id)/\($0.title)"), via: .moodleActivity) }
         let dated = (graded + other).map { (title: $0.title.lowercased(), date: $0.date) }
-        let events = (s.events ?? [])
+        let all = s.events ?? []
+        let events = zip(all, memberKeys(all, subject: s.id))
             // Jev's "grades out" / "info" are news, not deadlines (unclassified items stay, so nothing is lost without a key).
-            .filter { e in e.date >= start && e.date < end && e.kind?.isDated != false && hasContent(e.title) // not a bare "Dec 8 — -"
+            .filter { e, _ in e.date >= start && e.date < end && e.kind?.isDated != false && hasContent(e.title) // not a bare "Dec 8 — -"
                 // "Quiz 3 closes" ≈ "Quiz 3", but only within a week of it (a same-named item months away is another one)
                 && !dated.contains { abs($0.date.timeIntervalSince(e.date)) <= 7 * 86_400 && sameItem(e.title.lowercased(), $0.title) } }
-            .map { Deadline(id: "\(s.id)/event/\($0.source.rawValue)/\($0.date.timeIntervalSince1970)/\($0.title)", subject: s, title: $0.title,
-                            date: $0.date, weight: percentInTitle($0.title), source: $0.source, detail: $0.detail, kind: $0.kind,
-                            summary: $0.summary?.accepted == true ? $0.summary : nil, announcement: $0.announcement) }
+            .map { e, key in
+                Deadline(id: "\(s.id)/event/\(e.source.rawValue)/\(e.date.timeIntervalSince1970)/\(e.title)", subject: s, title: e.title,
+                         date: e.date, weight: percentInTitle(e.title), source: e.source, detail: e.detail, kind: e.kind,
+                         summary: e.summary?.accepted == true ? e.summary : nil, announcement: e.announcement,
+                         memberKey: key, via: e.resolvedVia, posted: e.posted)
+            }
         return graded + other + events
     }
     .sorted { $0.date < $1.date }

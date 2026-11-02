@@ -74,7 +74,8 @@ enum OutlookCalendar {
         var general: [CourseEvent] = []
         for i in items where !i.recurring && i.recurrenceID == nil && window.contains(i.start) { // a moved class session isn't news
             let text = [i.title, i.location.isEmpty ? nil : "Where: \(i.location)", i.notes.isEmpty ? nil : i.notes].compactMap { $0 }.joined(separator: "\n")
-            let e = CourseEvent(title: i.title, date: i.start, source: .outlook, detail: text, origin: text)
+            let e = CourseEvent(title: i.title, date: i.start, source: .outlook, detail: text, origin: text,
+                                via: .outlookCalendar, ref: i.uid.isEmpty ? nil : i.uid)
             if let n = Moodle.route(i.title, out) { out[n].events = ((out[n].events ?? []) + [e]).sorted { $0.date < $1.date } } else { general.append(e) }
         }
         guard !general.isEmpty else { return out }

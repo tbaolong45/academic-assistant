@@ -19,7 +19,10 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | P1 | Gmail never marked read: built-in IMAP client | Builder | SchoolMail.swift | done; reviewed (docs/reviews/P1.md), 1 High → F1 |
 | F1 | Fixes from reviews R1, B1, P1, R2 (15 items) | Builder + Test writer | see docs/tasks/F1-review-fixes.md | done (9b8a6f4); review pending |
 | P2 | One publish per sync, sync generation, concurrent sources | Builder + Test writer | Store.swift, Summarizer.swift | built; checks (a),(b),(d) pending; (c) waits for the signing identity; (e) user-run, optional |
-| F1b | Fixes from reviews F1, P4 (5 items) | Builder + Test writer | see docs/tasks/F1b-review-fixes.md | next, before U3 |
+| F1b | Fixes from reviews F1, P4 (5 items) | Builder + Test writer | see docs/tasks/F1b-review-fixes.md | done (8a50e39), reviewed |
+| U3 | Native sidebar, follow system appearance, macOS 26 | Builder | App.swift, Package.swift | done (8a50e39); screenshots wait for signing cert |
+| B2 | Origin (`via`) on every dated item, memberKey | Builder + Test writer | Model, Moodle, Outlook, SchoolMail, Materials | done; B2 checks pending; review pending |
+| F1c | Fixes from reviews P2, F1b (5 items, 2 Medium) | Builder + Test writer | see docs/tasks/F1c-review-fixes.md | in progress |
 | U1c | Dark mode: brighter, more contrast, livelier hues (user request) | Architect → Builder | ui-redesign.md, then Theme.swift | architect drafting; user sees values before build; build after P2 |
 | P4 | Mail progress: per-message saves, retry cap, skipped-date count | Builder + Test writer | SchoolMail.swift, Store.swift | done; checks (c),(e) pending; review pending |
 | G1 | Entire + GitHub: public code repo, private checkpoints repo | Coordinator | git config, .entire/ | done: github.com/tbaolong45/academic-assistant (public), Entire mirror aws-ap-south-1 |

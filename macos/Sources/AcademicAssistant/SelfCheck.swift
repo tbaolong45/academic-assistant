@@ -4,8 +4,9 @@ import Foundation
 // `AcademicAssistant --self-check` verifies the grade math and exits.
 // (Swift Testing / XCTest need Xcode; the Command Line Tools lack their macro plugins.)
 func runSelfCheck() -> Never {
-    var failures = 0
-    func check(_ ok: Bool, _ what: String) { print(ok ? "✔ \(what)" : "✘ \(what)"); if !ok { failures += 1 } }
+    final class FailureCount { var n = 0 } // a box: a plain `var` made the compiler treat the summary's else-branch as dead
+    let failures = FailureCount()
+    func check(_ ok: Bool, _ what: String) { print(ok ? "✔ \(what)" : "✘ \(what)"); if !ok { failures.n += 1 } }
 
     check(Subject.find("linear-algebra")?.runningGrade == 80.6, "Linear Algebra running grade 80.6") // (4*85+4*72+10*90+30*78)/48
     check(Subject.find("intro-to-ai")?.runningGrade == 85.9, "Intro to AI running grade 85.9")
@@ -491,6 +492,7 @@ func runSelfCheck() -> Never {
           "scrub: dotted dates ('23.10.2026-25.10.2026', '23.10.2026 10.00') are not phone numbers")
     let shortDotted = "23.10.26 10.00"
     check(scrubPersonal(shortDotted) == shortDotted, "scrub: a two-digit-year dotted date ('23.10.26 10.00') is not a phone number")
+    check(scrubPersonal("23.10.26") == "23.10.26", "scrub: a two-digit-year dotted date ('23.10.26') alone is not a phone number")
     let crlfSig = scrubPersonal("Submit.\r\n\r\nBest regards,\r\nDr. Jane Doe")
     check(crlfSig.contains("Submit.") && !crlfSig.contains("Jane"),
           "scrub: a CRLF signature block is cut too (got \(crlfSig))")
@@ -582,6 +584,21 @@ func runSelfCheck() -> Never {
     }
     check(closedDownload.store.messages.map(\.uid) == [1] && closedDownload.store.failures == [2: 1] && closedDownload.saves == 2,
           "mail: a lost connection counts one failure for the mail in flight, saves, then stops (got \(closedDownload.store.failures))")
+    let cancelledDownload = MailBox()
+    let cancelDone = DispatchSemaphore(value: 0)
+    Task {
+        await SchoolMail.download([1, 2, 3], into: &cancelledDownload.store, fetch: { uid in
+            if uid == 2 {
+                withUnsafeCurrentTask { $0?.cancel() }
+                throw CancellationError()
+            }
+            return SchoolMail.Message(uid: uid, subject: "s\(uid)", from: "f", date: .now, body: "b")
+        }, save: { _ in cancelledDownload.saves += 1 })
+        cancelDone.signal()
+    }
+    _ = cancelDone.wait(timeout: .now() + 10)
+    check(cancelledDownload.store.messages.map(\.uid) == [1] && cancelledDownload.store.failures.isEmpty && cancelledDownload.saves == 1,
+          "mail: a cancelled download stops without counting a failure (got \(cancelledDownload.store.failures))")
     let dyingDownload = MailBox()
     runDownload(dyingDownload) { uid in
         if uid == 3 { throw MailError.timeout }
@@ -629,6 +646,49 @@ func runSelfCheck() -> Never {
     }
     let gate = MainActor.assumeIsolated { (Store.isCurrent(generation: 3, current: 3), Store.isCurrent(generation: 3, current: 4)) }
     check(gate.0 && !gate.1, "sync: a result from generation 3 applies only while 3 is still current")
+
+    // MARK: - Origin & identity (B2)
+
+    let oldCacheJSON = #"""
+    [{"id":"old","name":"Old","code":"OLD","hue":"green","assessments":[],
+      "assignments":[{"title":"A","due":0,"status":"Open"}],"materials":[],
+      "announcements":[{"title":"N","source":"Moodle","from":"T","date":0}],
+      "events":[{"title":"Quiz on 3 Oct","date":0,"source":"Document","detail":"On the course page: quiz"}]}]
+    """#
+    do {
+        let oldCache = try JSONDecoder().decode([Subject].self, from: Data(oldCacheJSON.utf8))
+        check(oldCache.first?.events?.first?.resolvedVia == .coursePage && oldCache.first?.assignments.first?.moodleID == nil
+              && oldCache.first?.announcements.first?.modified == nil,
+              "b2: a cache written before B2 decodes; a missing `via` is inferred (course page) and new fields stay nil")
+    } catch { check(false, "b2: an old cache decodes (\(error))") }
+    let oldAnnouncement = #"{"title":"N","source":"Moodle","from":"T","date":0}"#
+    check((try? JSONDecoder().decode(Announcement.self, from: Data(oldAnnouncement.utf8)))?.modified == nil,
+          "b2: an announcement without `modified` decodes (edited-post support is optional)")
+
+    let keyDate = Date(timeIntervalSince1970: 1_800_000_000)
+    let movedEvent = CourseEvent(title: "Assignment 2: Eigenvalues", date: keyDate.addingTimeInterval(2 * 86_400),
+                                 source: .announcement, via: .news, posted: .now)
+    let originalEvent = CourseEvent(title: "Assignment 2: Eigenvalues", date: keyDate,
+                                    source: .announcement, via: .news, posted: .now)
+    check(memberKeys([originalEvent], subject: "la") == memberKeys([movedEvent], subject: "la"),
+          "b2: a member key contains no date, so moving the date keeps the item's identity")
+    let sameWords = [CourseEvent(title: "Quiz 3", date: keyDate, source: .announcement, via: .news),
+                     CourseEvent(title: "Quiz 3", date: keyDate.addingTimeInterval(86_400), source: .announcement, via: .news)]
+    let sameKeys = memberKeys(sameWords, subject: "s")
+    check(sameKeys.count == 2 && sameKeys[0].hasSuffix("/0") && sameKeys[1].hasSuffix("/1")
+          && String(sameKeys[0].dropLast(2)) == String(sameKeys[1].dropLast(2)),
+          "b2: two same-keyword dates in one post get /0 and /1 (got \(sameKeys))")
+
+    let oct1 = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 1, hour: 9))!
+    let oct5 = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 5, hour: 9))!
+    let edited = Moodle.announcement(Moodle.Discussion(name: "Moved", subject: nil, message: "<p>New room</p>",
+        userfullname: "Dr. X", created: Int(oct1.timeIntervalSince1970), timemodified: Int(oct5.timeIntervalSince1970)))
+    check(edited.date == oct1 && edited.modified == oct5 && edited.posted == oct5 && edited.body == "New room",
+          "b2: an edited post keeps its creation `date` but `posted` moves to the edit")
+    let plainPost = Moodle.announcement(Moodle.Discussion(name: "Plain", subject: nil, message: nil, userfullname: nil,
+        created: Int(oct1.timeIntervalSince1970), timemodified: nil))
+    check(plainPost.modified == nil && plainPost.posted == plainPost.date && plainPost.from == "Moodle",
+          "b2: without `timemodified`, posted == created")
 
     // MARK: - Security (T1)
 
@@ -696,6 +756,6 @@ func runSelfCheck() -> Never {
               "owner-only: writing again resets a loosened folder back to 0700 (got \(perms(folderPath).map { String($0, radix: 8) } ?? "nil"))")
     } catch { check(false, "owner-only: writeOwnerOnly runs (\(error))") }
 
-    print(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")
-    exit(failures == 0 ? 0 : 1)
+    if failures.n == 0 { print("All checks passed") } else { print("\(failures.n) check(s) failed") }
+    exit(failures.n == 0 ? 0 : 1)
 }

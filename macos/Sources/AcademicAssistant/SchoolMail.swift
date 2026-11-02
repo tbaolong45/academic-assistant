@@ -212,7 +212,7 @@ enum SchoolMail {
         var general: [Announcement] = [], generalEvents: [CourseEvent] = []
         for m in messages {
             let a = Announcement(title: m.subject, source: .outlook, from: m.from, date: m.date, body: String(m.body.prefix(4000)))
-            let events = Moodle.mentionedDates(String(m.body.prefix(4000)), posted: m.date, source: .announcement).map { e -> CourseEvent in
+            let events = Moodle.mentionedDates(String(m.body.prefix(4000)), posted: m.date, source: .announcement, via: .mail).map { e -> CourseEvent in
                 var e = e; e.origin = "✉︎ \(m.subject)\n\n\(m.body.prefix(3000))"; e.announcement = a.key; return e
             }
             if let i = Moodle.route("\(m.subject) \(m.body.prefix(600))", out) {

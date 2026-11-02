@@ -185,13 +185,15 @@ struct Moodle: Sendable {
             let courseIDs = Set(g.members.map(\.id))
             let events = Self.calendarEvents(calendar?.events ?? [], courseIDs: courseIDs)
                 + teacherNews.flatMap { a in a.body.map { b in
-                    Self.mentionedDates(b, posted: a.date, source: .announcement).map { var e = $0; e.origin = "\(a.title)\n\n\(b)"; e.announcement = a.key; return e }
+                    Self.mentionedDates(b, posted: a.date, source: .announcement, via: .news)
+                        .map { var e = $0; e.origin = "\(a.title)\n\n\(b)"; e.announcement = a.key; e.posted = a.posted; return e }
                 } ?? [] }
                 // Dates written on the course page itself (labels, section summaries, activity descriptions).
                 + materials.flatMap { m in m.text.map { t in
+                    // `via` is set here, before shared dates move to General (which keeps the detail prefix too).
                     Self.mentionedDates(t, posted: m.date, source: .document, strict: true)
                         .map { CourseEvent(title: $0.title, date: $0.date, source: .document, detail: "On the course page (“\(m.title)”): \($0.detail ?? "")",
-                                           origin: "\(m.title)\n\n\(t)") }
+                                           origin: "\(m.title)\n\n\(t)", via: .coursePage, posted: $0.posted, ref: m.title) }
                 } ?? [] }
             var seenEvents = Set<String>()
             let uniqueEvents = events.filter { seenEvents.insert("\($0.date.timeIntervalSince1970)|\($0.title)").inserted }
@@ -212,7 +214,7 @@ struct Moodle: Sendable {
             guard let i = Self.route("\(a.title) \(a.body ?? "")", subjects) else { generalInbox.append(a); return }
             subjects[i].announcements.append(a)
             if dates, let body = a.body {
-                let found = Self.mentionedDates(body, posted: a.date, source: .announcement).map { var e = $0; e.origin = "\(a.title)\n\n\(body)"; e.announcement = a.key; return e }
+                let found = Self.mentionedDates(body, posted: a.date, source: .announcement, via: a.source == .message ? .message : .news).map { var e = $0; e.origin = "\(a.title)\n\n\(body)"; e.announcement = a.key; return e }
                 subjects[i].events = ((subjects[i].events ?? []) + found).sorted { $0.date < $1.date }
             }
         }
@@ -246,7 +248,7 @@ struct Moodle: Sendable {
         }
         // The same course-page date in several courses is the university calendar (holidays, reading days): list it once, in General.
         let pageKey = { (e: CourseEvent) in "\(e.date.timeIntervalSince1970)|\(e.title)" }
-        let pageEvents = subjects.flatMap { ($0.events ?? []).filter { ($0.detail ?? "").hasPrefix("On the course page") } }
+        let pageEvents = subjects.flatMap { ($0.events ?? []).filter { $0.resolvedVia == .coursePage } }
         let shared = Set(Dictionary(grouping: pageEvents, by: pageKey).filter { $0.value.count > 1 }.keys)
         var sharedEvents: [String: CourseEvent] = [:]
         for i in subjects.indices {
@@ -257,7 +259,8 @@ struct Moodle: Sendable {
             }
         }
         let generalEvents = Array(sharedEvents.values) + Self.calendarEvents(calendar?.events ?? [], courseIDs: [0, 1])
-            + siteNews.flatMap { a in a.body.map { Self.mentionedDates($0, posted: a.date, source: .announcement) } ?? [] }
+            + siteNews.flatMap { a in a.body.map { Self.mentionedDates($0, posted: a.date, source: .announcement, via: .news)
+                .map { var e = $0; e.announcement = a.key; e.posted = a.posted; return e } } ?? [] }
         if !generalEvents.isEmpty || !siteNews.isEmpty || !generalInbox.isEmpty {
             subjects.append(Subject(id: "general", name: "MBZUAI · General", code: "GENERAL", hue: .slate, assessments: [], assignments: [],
                                     materials: [], announcements: (siteNews + generalInbox).sorted { $0.date > $1.date },
@@ -321,6 +324,7 @@ extension Moodle {
     struct CalendarEvent: Decodable {
         let name: String?, description: String?, modulename: String?, eventtype: String?
         let courseid: Int?, timestart: Int?
+        var id: Int? = nil
     }
     struct Quizzes: Decodable { let quizzes: [Quiz] }
     struct Quiz: Decodable { let id: Int; let course: Int; let name: String?; let timeclose: Int? }
@@ -412,7 +416,7 @@ extension Moodle {
                 // still in the future → open; in the past → open only if the calendar still asks for a submission.
                 let done = graded.contains(a.id) || (submitted[a.id] ?? ($0 > now ? false : !pending.contains(a.id)))
                 return AssignmentItem(title: a.name, due: $0, status: done ? .submitted : .open,
-                                      details: a.intro.map(plainText).flatMap { $0.isEmpty ? nil : $0 })
+                                      details: a.intro.map(plainText).flatMap { $0.isEmpty ? nil : $0 }, moodleID: a.id)
             }
         }
         .sorted { $0.due < $1.due }
@@ -438,7 +442,7 @@ extension Moodle {
                   let name = e.name, name.range(of: "attendance", options: .caseInsensitive) == nil,
                   let when = date(e.timestart ?? 0) else { return nil }
             let d = e.description.map(plainText).flatMap { $0.isEmpty ? nil : $0 }
-            return CourseEvent(title: name, date: when, source: .calendar, detail: d)
+            return CourseEvent(title: name, date: when, source: .calendar, detail: d, via: .moodleCalendar, ref: e.id.map(String.init))
         }
     }
 
@@ -454,7 +458,7 @@ extension Moodle {
     private static let time = try! NSRegularExpression(pattern: #"(?i)\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(\d{1,2}):(\d{2})\b"#)
     private static let dateOnly = try! NSRegularExpression(pattern: #"(?i)^(?:"# + mon + #"\.?\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s+"# + mon + #")$"#)
 
-    static func mentionedDates(_ text: String, posted: Date, source: CourseEvent.Source, strict: Bool = false) -> [CourseEvent] {
+    static func mentionedDates(_ text: String, posted: Date, source: CourseEvent.Source, strict: Bool = false, via: Origin? = nil) -> [CourseEvent] {
         let cal = Calendar.current
         var out: [CourseEvent] = []
         let parts = text.components(separatedBy: CharacterSet(charactersIn: "!?\n")).flatMap { $0.components(separatedBy: ". ") }
@@ -529,7 +533,7 @@ extension Moodle {
                 guard var when = cal.date(from: DateComponents(year: f.year ?? postedYear, month: f.month, day: f.day, hour: hour, minute: minute)),
                       cal.component(.day, from: when) == f.day else { continue }
                 if f.year == nil, when < posted.addingTimeInterval(-30 * 86_400), let next = cal.date(byAdding: .year, value: 1, to: when) { when = next }
-                out.append(CourseEvent(title: String(context.prefix(110)), date: when, source: source, detail: context))
+                out.append(CourseEvent(title: String(context.prefix(110)), date: when, source: source, detail: context, via: via, posted: posted))
             }
         }
         return out
@@ -597,7 +601,7 @@ extension Moodle {
     static func announcement(_ d: Discussion) -> Announcement {
         Announcement(title: d.name ?? d.subject ?? "Announcement", source: .moodle, from: d.userfullname ?? "Moodle",
                      date: date(d.created ?? 0) ?? date(d.timemodified ?? 0) ?? .distantPast,
-                     body: d.message.map(plainText).flatMap { $0.isEmpty ? nil : $0 })
+                     body: d.message.map(plainText).flatMap { $0.isEmpty ? nil : $0 }, modified: date(d.timemodified ?? 0))
     }
 }
 
