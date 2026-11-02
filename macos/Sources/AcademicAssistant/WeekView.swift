@@ -6,18 +6,21 @@ struct WeekView: View {
     let open: (String) -> Void
     @Local private var offset = 0 // weeks from this week
     @Local private var forward = true // direction of the last week change, for the slide
-    @Local private var group: DeadlineGroup = .all
+    @AppStorage("boardFilter") private var filterJSON = "" // a view preference: `BoardFilter` as JSON
     @EnvironmentObject private var store: Store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let now = Date.now
         let start = cal.date(byAdding: .weekOfYear, value: offset, to: weekStart(of: now))!
-        let everything = store.board.between(start, cal.date(byAdding: .day, value: 7, to: start)!) // calendar days: DST-safe
-        let items = everything.filter { $0.isIn(group) }
+        let end = cal.date(byAdding: .day, value: 7, to: start)! // calendar days: DST-safe
+        let f = filter, everything = store.items.between(start, end) // hidden ones too: "Show hidden" may want them
+        let items = f.apply(everything)
         let days = boardDays(items, weekStart: start, now: now)
+        // Do next and crunch follow only the course and unsure filters, and never show hidden items (§4).
+        let ranked = f.forRanking.apply(store.items)
         // "Do next" = work to hand in and exams in the next 28 days, by priority (deadline-priority.md §1).
-        let next = doNext(store.board, now: now)
+        let next = doNext(ranked, now: now)
 
         // Breakpoints come from the width the pane offers, never from the board's own size (see CLAUDE.md).
         GeometryReader { g in
@@ -26,7 +29,9 @@ struct WeekView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     header(start: start, items: items, everything: everything)
                     // Workload = work to hand in + exams, not talks or cancelled classes.
-                    if let c = crunch(items.filter { $0.date >= now && ($0.toSubmit || $0.kind == .exam) }, now: now) { CrunchBanner(crunch: c) }
+                    if let c = crunch(ranked.between(start, end).filter { $0.date >= now && ($0.toSubmit || $0.kind == .exam) }, now: now) {
+                        CrunchBanner(crunch: c)
+                    }
                     if !next.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             SectionLabel("Do next")
@@ -74,12 +79,87 @@ struct WeekView: View {
                 VStack(alignment: .leading, spacing: 8) { range; weekButtons }
             }
             HStack(spacing: 12) {
-                Picker("Show", selection: $group) {
-                    ForEach(DeadlineGroup.allCases, id: \.self) { g in Text("\(g.rawValue) \(everything.filter { $0.isIn(g) }.count)").tag(g) }
+                Picker("Show", selection: binding(\.group)) {
+                    // Each count is what that choice would show with the other filters kept.
+                    ForEach(DeadlineGroup.allCases, id: \.self) { g in
+                        Text("\(g.rawValue) \({ var x = filter; x.group = g; return x.apply(everything).count }())").tag(g)
+                    }
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
+                filterMenu
                 Text("\(items.count) item\(items.count == 1 ? "" : "s") · \(weight)% of grades due")
                     .font(.callout).foregroundStyle(Palette.text2.color)
+            }
+            filterChips
+        }
+    }
+
+    // MARK: Filter (deadline-priority.md §4)
+
+    private var filter: BoardFilter { (try? JSONDecoder().decode(BoardFilter.self, from: Data(filterJSON.utf8))) ?? BoardFilter() }
+
+    private func setFilter(_ f: BoardFilter) { filterJSON = (try? JSONEncoder().encode(f)).flatMap { String(data: $0, encoding: .utf8) } ?? "" }
+
+    private func binding<T>(_ path: WritableKeyPath<BoardFilter, T>) -> Binding<T> {
+        Binding(get: { filter[keyPath: path] }, set: { var f = filter; f[keyPath: path] = $0; setFilter(f) })
+    }
+
+    private func member<T: Hashable>(_ path: WritableKeyPath<BoardFilter, Set<T>>, _ value: T) -> Binding<Bool> {
+        Binding(get: { filter[keyPath: path].contains(value) },
+                set: { on in var f = filter; if on { f[keyPath: path].insert(value) } else { f[keyPath: path].remove(value) }; setFilter(f) })
+    }
+
+    private static let types: [ItemKind] = [.deadline, .exam, .classChange, .event]
+
+    private func typeName(_ k: ItemKind) -> String { k.label.prefix(1) + k.label.dropFirst().lowercased() } // "Exam/quiz"
+    private func originName(_ o: Origin) -> String { o.label.prefix(1).uppercased() + o.label.dropFirst() } // "PDF", "Announcement"
+
+    private var filterMenu: some View {
+        Menu {
+            Menu("Courses") {
+                ForEach(store.subjects) { s in
+                    Toggle(isOn: member(\.courses, s.id)) { Label(s.name, systemImage: "circle.fill") }.tint(s.hue.palette.accent)
+                }
+            }
+            Menu("Type") { ForEach(Self.types, id: \.self) { k in Toggle(typeName(k), isOn: member(\.types, k)) } }
+            Menu("Source") { ForEach(Origin.allCases, id: \.self) { o in Toggle(originName(o), isOn: member(\.origins, o)) } }
+            Divider()
+            Toggle("Hide unsure", isOn: binding(\.hideUnsure))
+            Toggle("Show hidden", isOn: binding(\.showHidden))
+            if filter != BoardFilter(group: filter.group) {
+                Divider()
+                Button("Clear filters") { setFilter(BoardFilter(group: filter.group)) }
+            }
+        } label: {
+            Label("Filter", systemImage: "line.3.horizontal.decrease.circle")
+        }
+        .fixedSize()
+        .help("Filter by course, type and source; hide unsure items or show hidden ones")
+    }
+
+    /// Each active filter as a chip; clicking it removes that filter.
+    @ViewBuilder private var filterChips: some View {
+        let f = filter
+        let chips: [(String, () -> Void)] =
+            store.subjects.filter { f.courses.contains($0.id) }.map { s in (s.name, { member(\.courses, s.id).wrappedValue = false }) }
+            + Self.types.filter { f.types.contains($0) }.map { k in (typeName(k), { member(\.types, k).wrappedValue = false }) }
+            + Origin.allCases.filter { f.origins.contains($0) }.map { o in (originName(o), { member(\.origins, o).wrappedValue = false }) }
+            + (f.hideUnsure ? [("Hiding unsure", { binding(\.hideUnsure).wrappedValue = false })] : [])
+            + (f.showHidden ? [("Showing hidden", { binding(\.showHidden).wrappedValue = false })] : [])
+        if !chips.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(chips.indices, id: \.self) { i in
+                        Button(action: chips[i].1) {
+                            HStack(spacing: 4) { Text(chips[i].0); Image(systemName: "xmark").font(.caption2.weight(.bold)) }
+                                .font(.caption).foregroundStyle(Palette.accentInk.color)
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .background(Palette.accentSoft.color, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove this filter").accessibilityLabel("Remove filter \(chips[i].0)")
+                    }
+                }
             }
         }
     }

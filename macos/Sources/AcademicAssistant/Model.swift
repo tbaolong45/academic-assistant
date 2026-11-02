@@ -71,6 +71,7 @@ struct CourseEvent: Hashable, Sendable, Codable {
     var posted: Date? = nil // when the post, mail or file it came from was written
     var moved: Bool? = nil // the text says the date moved ("postponed to 1 Nov"): set by B4
     var ref: String? = nil // stable source id: Moodle calendar event id, ICS UID, file url or material title
+    var kindConfidence: Double? = nil // Jev's confidence in `kind`'s answer (set even when a low "info" is ignored)
 
     var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: origin) }
 }
@@ -310,6 +311,7 @@ struct Deadline: Identifiable, Sendable {
     var mark: Mark? = nil // done / dismissed / snoozed (`applyMarks`)
     var hidden = false // marked and not back yet: off the board, Do next, Overview, the badge and crunch
     var dateChanged = false // dismissed or snoozed, then its date moved by more than 12 h (D4)
+    var kindConfidence: Double? = nil // `CourseEvent.kindConfidence`
 
     var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: nil) }
     /// The id of the card a subject's event becomes (`deadlines()`; the summarizer finds hidden members by it).
@@ -536,7 +538,7 @@ private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadli
                                 summary: e.summary?.accepted == true ? e.summary : nil, announcement: e.announcement,
                                 memberKey: key, via: e.resolvedVia, posted: e.posted, type: type,
                                 givenWeight: Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: e.title, type: type), moved: e.moved,
-                                ref: e.ref)
+                                ref: e.ref, kindConfidence: e.kindConfidence)
             }
         return graded + other + events
     })
@@ -567,9 +569,11 @@ func titleNumbers(_ title: String) -> Set<String> {
 func cluster(_ items: [Deadline]) -> [Deadline] {
     let words = items.map { clusterWords($0.title) }, numbers = items.map { titleNumbers($0.title) }
     let titles = items.map { $0.title.lowercased() }
-    // F1e #2: the days a text item names, from its title and the sentence it came from (a Moodle item's detail is its
-    // instructions, so only the title counts there).
-    let days = items.map { Moodle.namedDays($0.title + ($0.source == .announcement || $0.source == .document ? " " + ($0.detail ?? "") : "")) }
+    // F1e #2 / F1f #5: the days an item names. Title plus source sentence, except course pages and PDFs (their sentence
+    // can hold a whole calendar, so title only) and Moodle activities (their detail is instructions).
+    let days = items.map { d in
+        Moodle.namedDays(d.title + (d.source != nil && ![.coursePage, .pdf].contains(d.resolvedVia) ? " " + (d.detail ?? "") : ""))
+    }
     var refDates = items.map { d in d.ref.map { [$0: d.date] } ?? [:] } // per cluster root (F1e #3)
     var parent = Array(items.indices)
     var nums = numbers, activity = items.map { $0.resolvedVia == .moodleActivity } // per cluster root
@@ -820,10 +824,45 @@ func withSyllabus(_ code: String, _ assessments: [Assessment]) -> [Assessment] {
 
 /// The board's split: real deadlines (work you hand in: Moodle assignments and items Jev labels "deadline") vs events
 /// (exams/quizzes, class changes, sessions, and dated items not classified yet). Grades-out and info never reach the board.
-enum DeadlineGroup: String, CaseIterable, Sendable { case submit = "To submit", events = "Events", all = "All" }
+enum DeadlineGroup: String, CaseIterable, Codable, Sendable { case submit = "To submit", events = "Events", all = "All" }
 extension Deadline {
     var toSubmit: Bool { kind == .deadline }
     func isIn(_ g: DeadlineGroup) -> Bool { g == .all || (g == .submit) == toSubmit }
+}
+
+// MARK: - Filters (deadline-priority.md §4)
+
+extension Deadline {
+    /// A cluster with no Moodle or calendar member that comes only from PDFs, is not classified at all, or has a Jev
+    /// label below 0.6.
+    var isUnsure: Bool {
+        let all = [self] + alsoIn, solid: Set<Origin> = [.moodleActivity, .moodleCalendar, .outlookCalendar]
+        guard !all.contains(where: { solid.contains($0.resolvedVia) }) else { return false }
+        return all.allSatisfy { $0.resolvedVia == .pdf } || all.allSatisfy { $0.kind == nil } || all.contains { ($0.kindConfidence ?? 1) < 0.6 }
+    }
+}
+
+/// The Deadlines screen's filter. Empty sets mean all. Stored as JSON with `@AppStorage`: a view preference, not user data.
+struct BoardFilter: Codable, Equatable {
+    var group: DeadlineGroup = .all
+    var courses: Set<String> = [] // subject ids
+    var types: Set<ItemKind> = [] // deadline, exam, class change, event
+    var origins: Set<Origin> = [] // a cluster matches when any member comes from one of them
+    var hideUnsure = false // D5: off by default
+    var showHidden = false // done / dismissed / snoozed, shown dimmed
+
+    func apply(_ items: [BoardItem]) -> [BoardItem] {
+        items.filter { d in
+            (showHidden || !d.hidden) && d.isIn(group)
+                && (courses.isEmpty || courses.contains(d.subject.id))
+                && (types.isEmpty || d.kind.map(types.contains) == true)
+                && (origins.isEmpty || ([d] + d.alsoIn).contains { origins.contains($0.resolvedVia) })
+                && !(hideUnsure && d.isUnsure)
+        }
+    }
+
+    /// What Do next and crunch follow: the course and unsure filters only, and never hidden items.
+    var forRanking: BoardFilter { BoardFilter(courses: courses, hideUnsure: hideUnsure) }
 }
 
 // MARK: - Headlines

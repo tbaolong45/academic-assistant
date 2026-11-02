@@ -489,6 +489,10 @@ extension Moodle {
             .matches(of: /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thur?s?|fri|sat|sun)\b/)
             .map { String($0.1.prefix(3)) })
         for m in dayMonth.matches(in: text, range: all) { if let d = Int(g(m, 1)), let mo = month(g(m, 2)) { out.insert("\(mo)/\(d)") } }
+        // "1-2 Dec": the range's first day too (dayMonth above sees only "2 Dec")
+        for m in text.lowercased().matches(of: /\b(\d{1,2})\s*[-–]\s*\d{1,2}(?:st|nd|rd|th)?\s+([a-z]{3,9})/) {
+            if let d = Int(m.1), let mo = month(String(m.2)) { out.insert("\(mo)/\(d)") }
+        }
         for m in monthDay.matches(in: text, range: all) { if let d = Int(g(m, 2)), let mo = month(g(m, 1)) { out.insert("\(mo)/\(d)") } }
         return out
     }

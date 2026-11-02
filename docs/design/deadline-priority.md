@@ -189,7 +189,7 @@ Clustering runs per subject over all items: union-find on pairs, with n ≈ a fe
 - *Moved window:* the 30-day window opens only for a stated cue (`moved == true`). Jev's `class_change` still picks the date (§2.4) but within 3 days only, because Jev labels holidays ("no classes") `class_change`.
 - *Fast path:* `sameItem` uses the same 3-day window; F1's interim ±7 days is gone.
 - **Named days (F1e #2, B4 review #2):**
-  - Let `days(x)` be the weekdays and explicit dates named in x's title or source sentence.
+  - Let `days(x)` be the weekdays and explicit dates named in x's title or source sentence. For **course-page and PDF** items, use the title only: their "sentence" is often a whole calendar label or schedule table, which names every row's dates.
   - If both members have non-empty `days` and the sets don't overlap, they don't merge. The one exception is when the **newer-posted** member has a stated move cue and the older one has none, which is a supersede.
   - Weekdays never count as shared words.
   - So "No classes on Monday" / "No classes on Tuesday" → 2 cards. "Class moved to Tuesday" / "Class moved to Thursday" → 2 cards (both moved: ambiguous, so keep both). "Quiz 3 on Tuesday" then "Quiz 3 moved to Thursday" → 1 card dated Thursday.

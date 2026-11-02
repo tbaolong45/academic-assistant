@@ -46,16 +46,18 @@ func applyMarks(_ items: [Deadline], _ marks: Marks, now: Date) -> [Deadline] {
 
 /// After a sync: drops marks whose item is gone from every source (`live` = hashed keys) and was dated over 30 days ago.
 func pruneMarks(_ marks: Marks, live: Set<String>, now: Date) -> Marks {
-    marks.filter { live.contains($0.key) || $0.value.itemDate > now.addingTimeInterval(-30 * 86_400) }
+    marks.filter { live.contains($0.key) || $0.value.itemDate >= now.addingTimeInterval(-30 * 86_400) } // exactly 30 days is kept
 }
 
-/// The snooze menu: tomorrow 08:00, Monday 08:00, and 2 days before it's due (while that's still ahead).
+/// The snooze menu: tomorrow 08:00, next Monday 08:00 (on a Monday, the one after), and 2 days before it's due (while
+/// that's still ahead).
 func snoozeOptions(_ d: Deadline, now: Date, calendar: Calendar = .current) -> [(label: String, until: Date)] {
     var out: [(label: String, until: Date)] = []
     if let t = calendar.date(byAdding: .day, value: 1, to: now), let at8 = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: t) {
         out.append(("Tomorrow 08:00", at8))
     }
-    if let mon = calendar.nextDate(after: now, matching: DateComponents(hour: 8, minute: 0, weekday: 2), matchingPolicy: .nextTime) {
+    if let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)),
+       let mon = calendar.nextDate(after: tomorrow, matching: DateComponents(hour: 8, minute: 0, weekday: 2), matchingPolicy: .nextTime) {
         out.append(("Monday 08:00", mon))
     }
     let before = d.date.addingTimeInterval(-2 * 86_400)

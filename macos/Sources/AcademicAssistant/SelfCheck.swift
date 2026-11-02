@@ -857,10 +857,10 @@ func runSelfCheck() -> Never {
     // MARK: - Clusters (B4)
 
     func b4(_ title: String, _ date: Date, via: Origin = .news, posted: Date? = nil, moved: Bool? = nil,
-            kind: ItemKind = .deadline, ref: String? = nil) -> Deadline {
+            kind: ItemKind = .deadline, ref: String? = nil, detail: String? = nil) -> Deadline {
         Deadline(id: "b4/" + title, subject: b3LA, title: title, date: date, weight: nil,
-                 source: via == .moodleActivity ? nil : (via == .pdf ? .document : .announcement),
-                 kind: kind, via: via, posted: posted, moved: moved, ref: ref)
+                 source: via == .moodleActivity ? nil : (via == .pdf || via == .coursePage ? .document : .announcement),
+                 detail: detail, kind: kind, via: via, posted: posted, moved: moved, ref: ref)
     }
     func b4Is(_ date: Date, _ y: Int, _ mo: Int, _ d: Int) -> Bool {
         b3Cal.dateComponents([.year, .month, .day], from: date) == DateComponents(year: y, month: mo, day: d)
@@ -935,6 +935,65 @@ func runSelfCheck() -> Never {
     check(cluster([bridgeFirst, bridgeSecond, bridgeNews]).count == 2,
           "cluster: a news mention can't chain one PDF ref at two dates into one cluster")
 
+    // F1f #5: holidays named in one label keep their own dates; the day rule reads titles, not the shared sentence.
+    let holidayLabel = "On the course page: Commemoration Day 30 Nov. UAE National Day 1-2 Dec."
+    let commemorationPage = b4("Commemoration Day (30 Nov)", b3At(2026, 11, 30), via: .coursePage, ref: "holidays", detail: holidayLabel)
+    let nationalPage = b4("UAE National Day (1-2 Dec)", b3At(2026, 12, 1), via: .coursePage, ref: "holidays", detail: holidayLabel)
+    check(cluster([commemorationPage, nationalPage]).count == 2,
+          "cluster: two holidays from one course-page label stay two cards (got \(cluster([commemorationPage, nationalPage]).count))")
+    let commemorationPDF = b4("Commemoration Day (30 Nov)", b3At(2026, 11, 30), via: .pdf, ref: "schedule.pdf", detail: holidayLabel)
+    let nationalPDF = b4("UAE National Day (1-2 Dec)", b3At(2026, 12, 1), via: .pdf, ref: "schedule.pdf", detail: holidayLabel)
+    check(cluster([commemorationPDF, nationalPDF]).count == 2,
+          "cluster: the same two holiday rows from a PDF stay two cards")
+    check(cluster([quizOnTuesday, quizMovedThursday]).count == 1,
+          "cluster: the Quiz 3 Tuesday→Thursday news pair still merges")
+
+    // MARK: - Filters (B6)
+
+    let filterOther = Subject(id: "oth", name: "Other", code: "OTH", hue: .orange, assessments: [], assignments: [],
+                              materials: [], announcements: [])
+    func fItem(_ id: String, _ subject: Subject, _ date: Date, _ via: Origin, kind: ItemKind? = .deadline,
+               also: [Deadline] = [], ref: String? = nil, confidence: Double? = nil) -> Deadline {
+        Deadline(id: id, subject: subject, title: id, date: date, weight: nil,
+                 source: via == .moodleActivity ? nil : (via == .pdf || via == .coursePage ? .document : .announcement),
+                 kind: kind, via: via, alsoIn: also, ref: ref, kindConfidence: confidence)
+    }
+    let pdfOnlyItem = fItem("pdf-only", b3LA, b3At(2026, 11, 11), .pdf, ref: "p.pdf")
+    let softKindItem = fItem("soft", b3LA, b3At(2026, 11, 12), .news, confidence: 0.45)
+    let unclassifiedItem = fItem("unclassified", b3LA, b3At(2026, 11, 13), .news, kind: nil)
+    let mixedItem = fItem("mixed", b3LA, b3At(2026, 11, 14), .moodleActivity,
+                          also: [fItem("mixed-pdf", b3LA, b3At(2026, 11, 14), .pdf, ref: "q.pdf")])
+    let plainItem = fItem("plain", b3LA, b3At(2026, 11, 10), .news)
+    let otherItem = fItem("other", filterOther, b3At(2026, 11, 15), .news)
+    let filterItems = [plainItem, pdfOnlyItem, softKindItem, unclassifiedItem, mixedItem, otherItem]
+    check(BoardFilter().apply(filterItems).map(\.id) == filterItems.map(\.id),
+          "filter: an empty filter keeps every item, in order")
+    var courseFilter = BoardFilter()
+    courseFilter.courses = [filterOther.id]
+    check(courseFilter.apply(filterItems).map(\.id) == ["other"], "filter: a course filter keeps only that course")
+    var hideFilter = BoardFilter()
+    hideFilter.hideUnsure = true
+    check(hideFilter.apply(filterItems).map(\.id) == ["plain", "mixed", "other"],
+          "filter: hideUnsure drops PDF-only, a 0.45 label and unclassified items, keeps a Moodle member (got \(hideFilter.apply(filterItems).map(\.id)))")
+    var markedItem = fItem("marked", b3LA, b3At(2026, 11, 16), .news)
+    markedItem.memberKey = "m1"
+    let markedBoard = applyMarks([markedItem], [BoardState.key("m1"): Mark(state: .done, itemDate: markedItem.date, at: b3Now)], now: b3Now)
+    var showFilter = BoardFilter()
+    showFilter.showHidden = true
+    check(BoardFilter().apply(markedBoard).isEmpty && showFilter.apply(markedBoard).map(\.id) == ["marked"]
+          && showFilter.apply(markedBoard)[0].hidden,
+          "filter: showHidden brings a marked item back, still marked hidden")
+    var picky = BoardFilter()
+    picky.courses = [filterOther.id]
+    picky.types = [.quiz]
+    picky.origins = [.pdf]
+    picky.hideUnsure = true
+    let rankingFilter = picky.forRanking
+    check(rankingFilter.types.isEmpty && rankingFilter.origins.isEmpty && rankingFilter.courses == [filterOther.id]
+          && rankingFilter.hideUnsure,
+          "filter: Do next follows the course and unsure filters only, not type or origin")
+    check(Moodle.namedDays("1-2 Dec") == ["12/1", "12/2"], "dates: a range '1-2 Dec' names both days")
+
     // MARK: - Done / dismiss / snooze (B5)
 
     func b5(_ title: String, _ date: Date, key: String) -> Deadline {
@@ -971,6 +1030,18 @@ func runSelfCheck() -> Never {
     check(pruneMarks(ageing, live: [], now: b3Now).keys.sorted() == [keptMarkKey]
           && pruneMarks(ageing, live: [oldMarkKey], now: b3Now).count == 2,
           "marks: pruning drops a 31-day-old mark with no source, keeps a 29-day one and any live key")
+    let b5Monday = b3At(2026, 11, 2, 7) // a Monday, before 08:00
+    let mondaySnooze = snoozeOptions(b5("Essay", b3At(2026, 11, 10), key: b5Key), now: b5Monday, calendar: b3Cal)
+        .first { $0.label.contains("Monday") }?.until
+    check(mondaySnooze.map { b3Cal.dateComponents([.year, .month, .day, .hour], from: $0) }
+          == DateComponents(year: 2026, month: 11, day: 9, hour: 8),
+          "marks: on Monday 07:00, the Monday snooze means the next Monday 08:00")
+    let edgeKey = BoardState.key("t:s/news/-/edge/0")
+    check(pruneMarks([edgeKey: Mark(state: .done, itemDate: b3Now.addingTimeInterval(-30 * 86_400), at: b3Now)],
+                     live: [], now: b3Now).count == 1
+          && pruneMarks([edgeKey: Mark(state: .done, itemDate: b3Now.addingTimeInterval(-31 * 86_400), at: b3Now)],
+                        live: [], now: b3Now).isEmpty,
+          "marks: exactly 30 days old is kept; 31 days is dropped")
     let boardStateBase = FileManager.default.temporaryDirectory.appendingPathComponent("aa-board-state-\(UUID().uuidString)", isDirectory: true)
     do {
         defer { try? FileManager.default.removeItem(at: boardStateBase) }

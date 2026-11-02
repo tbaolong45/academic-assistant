@@ -86,6 +86,11 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         applyBoardMarks()
     }
 
+    private func pruneBoardMarks() {
+        let kept = pruneMarks(marks, live: Set(rawBoard.flatMap(\.clusterKeys).map(BoardState.key)), now: .now)
+        if kept.count != marks.count { marks = kept; save { try BoardState.save(marks) } }
+    }
+
     // ponytail: hiding is worked out when the data or the marks change, so a snooze ends at the next sync (≤ 5 min late).
     private func applyBoardMarks() { items = applyMarks(rawBoard, marks, now: .now) }
 
@@ -143,12 +148,13 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
             use(result)
             save { try MoodleCache.save(result) }
             publish()
-            let kept = pruneMarks(marks, live: Set(rawBoard.flatMap(\.clusterKeys).map(BoardState.key)), now: .now)
-            if kept.count != marks.count { marks = kept; save { try BoardState.save(marks) } }
             if let previous, result.warnings.isEmpty, !lastSyncPartial { Notifier.post(Notifier.changes(old: previous, new: result.subjects)) }
             lastSyncPartial = !result.warnings.isEmpty
             await downloadMaterials(token: creds.token)
             await scanDocuments(gen)
+            // Only a complete board says an item is gone: after the PDF scan, and never after a sync with warnings
+            // (a course whose call failed is missing, and its marks are still live).
+            if result.warnings.isEmpty, Self.isCurrent(generation: gen, current: generation) { pruneBoardMarks() }
         case .failure(let error):
             publish() // Outlook or mail may still be new
             if !Task.isCancelled { syncError = error.localizedDescription }

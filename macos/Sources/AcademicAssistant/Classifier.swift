@@ -166,14 +166,20 @@ extension CourseEvent { var classifyText: String { detail ?? title } }
 /// An unsure "info"/"grades" (< 0.6) is left unlabelled so the item stays on the board: an audit of 240 labels found 32% of
 /// answers below 0.6 wrong (e.g. TA revision sessions called info) against under 2% above.
 func labeled(_ subjects: [Subject], _ known: [String: Jev.Answer]) -> [Subject] {
-    func kind(_ text: String) -> ItemKind? {
-        guard let a = known[Jev.id(text)] else { return nil }
+    func kind(_ a: Jev.Answer?) -> ItemKind? {
+        guard let a else { return nil }
         return a.kind.isDated || a.confidence >= 0.6 ? a.kind : nil
     }
     return subjects.map { s in
         var s = s
-        s.announcements = s.announcements.map { var a = $0; a.kind = kind(a.classifyText); return a }
-        s.events = s.events?.map { var e = $0; e.kind = kind(e.classifyText); return e }
+        s.announcements = s.announcements.map { var a = $0; a.kind = kind(known[Jev.id(a.classifyText)]); return a }
+        s.events = s.events?.map { e in
+            var e = e
+            let answer = known[Jev.id(e.classifyText)]
+            e.kind = kind(answer)
+            e.kindConfidence = answer?.confidence // below 0.6 = unsure (B6's "Hide unsure")
+            return e
+        }
         return s
     }
 }
