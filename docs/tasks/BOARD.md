@@ -25,7 +25,8 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | F1c | Fixes from reviews P2, F1b (5 items, 2 Medium) | Builder + Test writer | see docs/tasks/F1c-review-fixes.md | done; checks pending; review pending |
 | B3 | Priority + Do next (cutoffdate/extensionduedate, 28-day Do next) | Builder + Test writer | Model, Moodle, WeekView, WeekBoardParts | done; checks (a)-(h) pending; review pending |
 | F1d | Fixes from reviews B2, F1c (4 items, 1 Medium) | Builder + Test writer | see docs/tasks/F1d-review-fixes.md | done (d962b69 + next commit); review pending |
-| B4 | Cross-source dedupe (clusters), moved cue | Builder + Test writer | Model.swift | in progress |
+| B4 | Cross-source dedupe (clusters), moved cue | Builder + Test writer | Model, Moodle, WeekBoardParts | done; 4 deviations with architect; checks + review pending |
+| B5 | Marks (done/dismiss) keyed by memberKey | Builder + Test writer | Model, Store, views | in progress |
 | U4 | Overview + Deadlines restyle, endless-animation removal | Builder | HomeView, WeekView, WeekBoardParts | done (code); screenshots + idle CPU wait for signing cert |
 | U1c | Dark mode: brighter, more contrast, livelier hues (user request) | Architect → Builder | ui-redesign.md, then Theme.swift | architect drafting; user sees values before build; build after P2 |
 | P4 | Mail progress: per-message saves, retry cap, skipped-date count | Builder + Test writer | SchoolMail.swift, Store.swift | done; checks (c),(e) pending; review pending |

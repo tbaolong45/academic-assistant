@@ -832,6 +832,53 @@ func runSelfCheck() -> Never {
     check(lateBoard.count == 3 && Set(lateNext) == ["Late work", "Still open"] && !lateNext.contains("Too late"),
           "ranking: overdue work stays in Do next for 14 days (13 ✓, 15 ✗) or until its cutoff (20 days + cutoff ✓); got \(lateNext)")
 
+    // MARK: - Clusters (B4)
+
+    func b4(_ title: String, _ date: Date, via: Origin = .news, posted: Date? = nil, moved: Bool? = nil,
+            kind: ItemKind = .deadline, ref: String? = nil) -> Deadline {
+        Deadline(id: "b4/" + title, subject: b3LA, title: title, date: date, weight: nil,
+                 source: via == .moodleActivity ? nil : (via == .pdf ? .document : .announcement),
+                 kind: kind, via: via, posted: posted, moved: moved, ref: ref)
+    }
+    func b4Is(_ date: Date, _ y: Int, _ mo: Int, _ d: Int) -> Bool {
+        b3Cal.dateComponents([.year, .month, .day], from: date) == DateComponents(year: y, month: mo, day: d)
+    }
+    let b4SameDay = b3At(2026, 11, 2)
+    let tedCluster = cluster([b4("TED-Talk Script (8%)", b3At(2026, 11, 1, 23, 59), via: .moodleActivity),
+                              b4("TED Script due 1 Nov", b3At(2026, 11, 1, 23, 59), posted: b3At(2026, 10, 27))])
+    check(tedCluster.count == 1 && tedCluster[0].title == "TED-Talk Script (8%)" && tedCluster[0].resolvedVia == .moodleActivity,
+          "cluster: the TED script and its news mention are one item, with the Moodle title")
+    check(cluster([b4("Quiz 3", b4SameDay), b4("Quiz 4", b4SameDay)]).count == 2,
+          "cluster: 'Quiz 3' and 'Quiz 4' on one day stay two items")
+    check(cluster([b4("Assignment 1", b4SameDay), b4("Assignment 10", b4SameDay)]).count == 2,
+          "cluster: 'Assignment 1' and 'Assignment 10' stay two items")
+    let presentation = cluster([b4("Presentation", b3At(2026, 10, 27), posted: b3At(2026, 10, 20)),
+                                b4("Presentation", b3At(2026, 11, 3), posted: b3At(2026, 10, 25), moved: true)])
+    check(presentation.count == 1 && b4Is(presentation[0].date, 2026, 11, 3),
+          "cluster: a newer 'moved to' post joins its earlier mention and takes the new date (got \(presentation.count) items)")
+    let movedMention = Moodle.mentionedDates("The quiz has been moved from 20 Oct to 1 Nov",
+                                             posted: b3At(2026, 10, 20), source: .announcement, via: .news)
+    check(movedMention.count == 1 && movedMention[0].moved == true && b4Is(movedMention[0].date, 2026, 11, 1),
+          "cluster: 'moved from 20 Oct to 1 Nov' keeps only 1 Nov and marks it moved (got \(movedMention.map { "\($0.title) moved=\($0.moved ?? false)" }))")
+    let moodlePaper = b4("Final Paper", b3At(2026, 11, 1, 23, 59), via: .moodleActivity)
+    let conflicting = cluster([moodlePaper, b4("Final Paper", b3At(2026, 11, 4, 23, 59), posted: b3At(2026, 10, 29), moved: true)])
+    check(conflicting.count == 1 && b4Is(conflicting[0].date, 2026, 11, 1)
+          && conflicting[0].conflict?.contains("says moved to") == true,
+          "cluster: Moodle's date wins over a newer 'moved' post, which becomes a conflict note (got \(conflicting.first?.conflict ?? "none"))")
+    check(cluster([b4("Presentation", b3At(2026, 10, 27)), b4("Presentation", b3At(2026, 11, 6))]).count == 2,
+          "cluster: the same words 10 days apart, with no move cue, stay two items")
+    check(cluster([b4("Final Project Presentation", b3At(2026, 12, 8), ref: "schedule.pdf"),
+                   b4("Final Project Presentation", b3At(2026, 12, 10), ref: "schedule.pdf")]).count == 2,
+          "cluster: two rows of one schedule PDF (same ref) stay two cards even 2 days apart")
+    check(cluster([b4("Presentation", b3At(2026, 10, 27)),
+                   b4("Presentation", b3At(2026, 11, 6), kind: .classChange)]).count == 2,
+          "cluster: a Jev classChange label alone doesn't open the 30-day window")
+    check(cluster([b4("Lab 3", b4SameDay, via: .moodleActivity), b4("Lab 3", b4SameDay, via: .moodleActivity)]).count == 2,
+          "cluster: two Moodle activities with the same title on one day stay two items")
+    let weighted = cluster([moodlePaper, b4("Final Paper (14%)", b3At(2026, 11, 1, 23, 59), via: .pdf)])
+    check(weighted.count == 1 && weighted[0].weighting.value == 14 && weighted[0].weighting.text == "14%",
+          "cluster: a PDF's '(14%)' gives the weightless Moodle item its weight (got \(weighted.first?.weighting.text ?? "none"))")
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.

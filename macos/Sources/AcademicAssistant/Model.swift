@@ -93,6 +93,21 @@ enum Origin: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// The source in a sentence: "Also mentioned in: announcement (Thu 29 Oct), PDF".
+    var label: String {
+        switch self {
+        case .moodleActivity: "Moodle"
+        case .moodleCalendar: "Moodle calendar"
+        case .outlookCalendar: "Outlook calendar"
+        case .news: "announcement"
+        case .message: "message"
+        case .mail: "email"
+        case .coursePage: "course page"
+        case .syllabus: "syllabus"
+        case .pdf: "PDF"
+        }
+    }
+
     /// For items saved before B2 (no `via`): nil source = a Moodle activity.
     static func inferred(source: CourseEvent.Source?, detail: String?, text: String?) -> Origin {
         switch source {
@@ -272,7 +287,7 @@ struct Deadline: Identifiable, Sendable {
     let id: String
     let subject: Subject
     let title: String
-    let date: Date
+    var date: Date // a cluster's date can come from a "moved to" member (`cluster`)
     let weight: Int? // % of the course grade; nil = ungraded or unknown
     var source: CourseEvent.Source? = nil // nil = a Moodle activity (assignment/quiz); else calendar event or mentioned date
     var detail: String? = nil // instructions or the sentence the date came from
@@ -288,8 +303,20 @@ struct Deadline: Identifiable, Sendable {
     var givenWeight: Weighting? = nil // set by `deadlines()`; read `weighting`
     var cutoff: Date? = nil
     var extended: Bool? = nil
+    var moved: Bool? = nil // its text says the date moved (`CourseEvent.moved`)
+    var conflict: String? = nil // "Post on Thu 29 Oct says moved to Wed 4 Nov": a Moodle date a newer post disagrees with (D3)
+    var alsoIn: [Deadline] = [] // the cluster's other members (`cluster`)
+    var ref: String? = nil // `CourseEvent.ref`: the file or note a dated text item came from
 
     var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: nil) }
+    /// A move cue in the text, or Jev's "class change" label (it catches wording the regex misses).
+    var isMoved: Bool { moved == true || kind == .classChange }
+    /// "announcement (Thu 29 Oct), PDF": where else this item was found, for the preview.
+    var alsoMentioned: String? {
+        var seen = Set<String>()
+        let parts = alsoIn.map { m in m.resolvedVia.label + (m.posted.map { " (\($0.short()))" } ?? "") }.filter { seen.insert($0).inserted }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
 }
 
 // MARK: - Ranking (deadline-priority.md §1, §6; the tables are D1's approved starting values)
@@ -445,7 +472,7 @@ func deadlines(_ subjects: [Subject], from start: Date = .now, days: Int = 7) ->
 typealias BoardItem = Deadline
 
 func boardItems(_ subjects: [Subject]) -> [BoardItem] {
-    var ids = Set<String>() // SwiftUI's ForEach needs unique ids: keep the first (cross-source dedupe is B4's job)
+    var ids = Set<String>() // SwiftUI's ForEach needs unique ids: keep the first (`cluster` merges true duplicates already)
     return deadlines(subjects, in: Date.distantPast..<Date.distantFuture).filter { ids.insert($0.id).inserted }
         .map { var d = $0; d.headlineCache = d.headline; return d }
 }
@@ -468,11 +495,12 @@ extension [Deadline] {
     func between(_ start: Date, _ end: Date) -> [Deadline] { filter { $0.date >= start && $0.date < end } }
 }
 
+/// Builds every item at every date, merges each real-world item's mentions into one (`cluster`), then keeps the window:
+/// a "moved to" post can carry an item into or out of it.
 private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadline] {
-    let start = window.lowerBound, end = window.upperBound
-    return subjects.flatMap { s in
+    cluster(subjects.flatMap { s in
         let handedIn = s.assignments.filter { $0.status != .open }.map(\.title)
-        let graded = s.assessments.filter { a in a.score == nil && a.date >= start && a.date < end && !handedIn.contains { sameItem($0, a.name) }
+        let graded = s.assessments.filter { a in a.score == nil && !handedIn.contains { sameItem($0, a.name) }
                 && !(a.id.hasPrefix("syllabus/") && a.date < .now) } // a syllabus quiz that already happened is awaiting its mark, not overdue
             .map { a -> Deadline in
                 let task = s.assignments.first { sameItem($0.title, a.name) } // its Moodle assignment: cutoff and extension
@@ -485,29 +513,125 @@ private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadli
                                 cutoff: task?.cutoff, extended: task?.extended)
             }
         let other = s.assignments
-            .filter { a in a.status == .open && a.due >= start && a.due < end && !s.assessments.contains { sameItem(a.title, $0.name) } }
+            .filter { a in a.status == .open && !s.assessments.contains { sameItem(a.title, $0.name) } }
             .map { Deadline(id: "\(s.id)/task/\($0.title)", subject: s, title: $0.title, date: $0.due, weight: percentInTitle($0.title),
                             detail: $0.details, kind: .deadline,
                             memberKey: "a:" + ($0.moodleID.map(String.init) ?? "\(s.id)/\($0.title)"), via: .moodleActivity,
                             type: Moodle.kind(nil, $0.title),
                             givenWeight: Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: $0.title, type: Moodle.kind(nil, $0.title)),
                             cutoff: $0.cutoff, extended: $0.extended) }
-        let dated = (graded + other).map { (title: $0.title.lowercased(), date: $0.date) }
         let all = s.events ?? []
         let events = zip(all, memberKeys(all, subject: s.id))
             // Jev's "grades out" / "info" are news, not deadlines (unclassified items stay, so nothing is lost without a key).
-            .filter { e, _ in e.date >= start && e.date < end && e.kind?.isDated != false && hasContent(e.title) // not a bare "Dec 8 — -"
-                // "Quiz 3 closes" ≈ "Quiz 3", but only within a week of it (a same-named item months away is another one)
-                && !dated.contains { abs($0.date.timeIntervalSince(e.date)) <= 7 * 86_400 && sameItem(e.title.lowercased(), $0.title) } }
+            .filter { e, _ in e.kind?.isDated != false && hasContent(e.title) } // not a bare "Dec 8 — -"
             .map { e, key in
-                Deadline(id: "\(s.id)/event/\(e.source.rawValue)/\(e.date.timeIntervalSince1970)/\(e.title)", subject: s, title: e.title,
-                         date: e.date, weight: percentInTitle(e.title), source: e.source, detail: e.detail, kind: e.kind,
-                         summary: e.summary?.accepted == true ? e.summary : nil, announcement: e.announcement,
-                         memberKey: key, via: e.resolvedVia, posted: e.posted, type: Ranking.textType(e.title, kind: e.kind))
+                let type = Ranking.textType(e.title, kind: e.kind)
+                return Deadline(id: "\(s.id)/event/\(e.source.rawValue)/\(e.date.timeIntervalSince1970)/\(e.title)", subject: s, title: e.title,
+                                date: e.date, weight: percentInTitle(e.title), source: e.source, detail: e.detail, kind: e.kind,
+                                summary: e.summary?.accepted == true ? e.summary : nil, announcement: e.announcement,
+                                memberKey: key, via: e.resolvedVia, posted: e.posted, type: type,
+                                givenWeight: Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: e.title, type: type), moved: e.moved,
+                                ref: e.ref)
             }
         return graded + other + events
-    }
+    })
+    .filter { window.contains($0.date) }
     .sorted { $0.date < $1.date }
+}
+
+// MARK: - Clusters (deadline-priority.md §2.2–2.4)
+
+/// Words that say nothing about which item it is: move cues, weekdays and function words ("has been moved to Tuesday").
+private let clusterSkip: Set = ["deadline", "submit", "submitted", "moved", "postponed", "pushed", "back", "extended", "rescheduled",
+    "delayed", "shifted", "changed", "until", "till", "today", "tomorrow", "tonight", "monday", "tuesday", "wednesday", "thursday",
+    "friday", "saturday", "sunday", "week", "next", "has", "have", "had", "been", "will", "would", "with", "from", "this", "that",
+    "these", "those", "are", "was", "were", "our", "your", "you", "all", "not", "now", "there", "their", "its", "into", "than",
+    "then", "also", "only", "just", "please", "note", "reminder"]
+
+/// The words two mentions of one item share: `keywords` of its main point, minus `clusterSkip`.
+func clusterWords(_ title: String) -> Set<String> { keywords(mainPoint(title)).subtracting(clusterSkip) }
+
+/// The item numbers in a title ("Quiz 3", "Assignment 10"), without dates, percentages ("(8%)") and clock times.
+func titleNumbers(_ title: String) -> Set<String> {
+    let t = mainPoint(title).replacingOccurrences(of: #"\d+(?:\.\d+)?\s?%|\b\d{1,2}[:.]\d{2}\b"#, with: " ", options: .regularExpression)
+    return Set(t.matches(of: /\b\d+\b/).map { String(Int($0.output) ?? 0) }) // "03" = "3"
+}
+
+/// One card per real-world item: merges the mentions of an item across sources (§2.2), then shows the best member (§2.4).
+/// Union-find over all pairs; n is a few hundred, so O(n²) is fine. Output follows each cluster's first member.
+func cluster(_ items: [Deadline]) -> [Deadline] {
+    let words = items.map { clusterWords($0.title) }, numbers = items.map { titleNumbers($0.title) }
+    let titles = items.map { $0.title.lowercased() }
+    var parent = Array(items.indices)
+    var nums = numbers, activity = items.map { $0.resolvedVia == .moodleActivity } // per cluster root
+    func root(_ i: Int) -> Int {
+        var i = i
+        while parent[i] != i { parent[i] = parent[parent[i]]; i = parent[i] }
+        return i
+    }
+    // A moved item joins one posted before it, up to 30 days away (§2.2 rule 4). No `posted` (Moodle) counts as older.
+    // Only a stated move ("postponed to") reaches that far: Jev labels every "no classes" holiday a class change.
+    func movedAfter(_ m: Int, _ o: Int) -> Bool {
+        items[m].moved == true && (items[o].posted ?? .distantPast) < (items[m].posted ?? .distantFuture)
+    }
+    func same(_ i: Int, _ j: Int) -> Bool {
+        let (a, b) = (items[i], items[j])
+        let shared = words[i].intersection(words[j]).count
+        let general = a.subject.code == "GENERAL" || b.subject.code == "GENERAL"
+        guard a.subject.id == b.subject.id || (general && shared >= 2) else { return false }
+        // Rows of one schedule ("Dec 8 — Presentation", "Dec 10 — Presentation") are separate dates, not repeated mentions.
+        if let r = a.ref, r == b.ref, a.date != b.date { return false }
+        let gap = abs(a.date.timeIntervalSince(b.date))
+        guard gap <= 3 * 86_400 || (gap <= 30 * 86_400 && (movedAfter(i, j) || movedAfter(j, i))) else { return false }
+        if titles[i] == titles[j] || sameItem(titles[i], titles[j]) || sameItem(titles[j], titles[i]) { return true } // fast path
+        return shared >= max(1, min(2, words[i].count, words[j].count))
+            && (numbers[i].isEmpty || numbers[j].isEmpty || numbers[i] == numbers[j]) // "Quiz 3" ≠ "Quiz 4"
+    }
+    for i in items.indices {
+        for j in items.indices where j > i && same(i, j) {
+            let (a, b) = (root(i), root(j))
+            guard a != b,
+                  !(activity[a] && activity[b]), // two Moodle activities are two submissions, never one item
+                  nums[a].isEmpty || nums[b].isEmpty || nums[a] == nums[b] // a numberless post can't chain Quiz 3 to Quiz 4
+            else { continue }
+            parent[b] = a
+            nums[a].formUnion(nums[b])
+            activity[a] = activity[a] || activity[b]
+        }
+    }
+    var order: [Int] = [], members: [Int: [Int]] = [:]
+    for i in items.indices {
+        let r = root(i)
+        if members[r] == nil { order.append(r) }
+        members[r, default: []].append(i)
+    }
+    return order.map { merge(members[$0]!.map { items[$0] }) }
+}
+
+/// §2.4: the winner gives title, kind and click target (highest source rank, then newest post); the date is Moodle's for a
+/// Moodle activity (a disagreeing newer "moved" post becomes `conflict`, D3), else the newest moved member's, else the
+/// winner's; the weight is the best one any member has (Moodle, syllabus, spare, title, typical).
+private func merge(_ ms: [Deadline]) -> Deadline {
+    guard ms.count > 1 else { return ms[0] }
+    let w = ms.indices.min { a, b in
+        (ms[a].resolvedVia.rank, -(ms[a].posted ?? .distantPast).timeIntervalSinceReferenceDate)
+            < (ms[b].resolvedVia.rank, -(ms[b].posted ?? .distantPast).timeIntervalSinceReferenceDate)
+    }!
+    var d = ms[w]
+    d.alsoIn = ms.indices.filter { $0 != w }.map { var m = ms[$0]; m.alsoIn = []; return m }
+    let moved = ms.filter(\.isMoved).max { ($0.posted ?? .distantPast) < ($1.posted ?? .distantPast) }
+    if d.resolvedVia == .moodleActivity {
+        if let m = moved, abs(m.date.timeIntervalSince(d.date)) > 12 * 3600 {
+            d.conflict = (m.posted.map { "Post on \($0.short())" } ?? "A post") + " says moved to \(m.date.short())"
+        }
+    } else if let m = moved {
+        d.date = m.date
+    }
+    func order(_ x: Weighting) -> Int {
+        switch x.from { case .moodle: 0; case .syllabus: x.spare ? 2 : 1; case .title: 3; case .typical: 4 }
+    }
+    d.givenWeight = ([d] + d.alsoIn).map(\.weighting).min { order($0) < order($1) } // ties: the winner's
+    return d
 }
 
 // MARK: - Sample data (dates relative to launch so "this week" stays current)

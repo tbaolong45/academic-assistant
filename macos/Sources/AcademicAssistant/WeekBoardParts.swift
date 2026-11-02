@@ -32,7 +32,7 @@ private func timeLeft(_ date: Date, now: Date) -> String {
 private func spoken(_ d: Deadline, now: Date) -> String {
     let late = d.date < now ? "overdue, " : ""
     return "\(d.subject.name), \(d.headline), \(late)due \(weekday(d.date, .wide)) \(hhmm(d.date))"
-        + (d.showsWeight ? ", \(d.weighting.tag) of grade" : "")
+        + (d.showsWeight ? ", \(d.weighting.tag) of grade" : "") + (d.conflict.map { ", warning: \($0)" } ?? "")
 }
 
 // MARK: - Day column
@@ -155,6 +155,7 @@ private struct DeadlineCard: View {
                 Text(d.label)
                     .font(big ? .callout.weight(.bold) : .caption.weight(.medium)).foregroundStyle(Palette.text.color)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                if let c = d.conflict { ConflictNote(text: c) } // Moodle's date kept; a newer post disagrees (D3)
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 4) { when; Spacer(minLength: 4); if let weight { weight } }
                     VStack(alignment: .leading, spacing: 4) { when; if let weight { weight } }
@@ -231,6 +232,10 @@ struct DeadlinePreview: View {
             if d.toSubmit || d.kind == .exam { // why it ranks where it does, and where the weight came from
                 Text(d.reason(now: now)).font(.caption).foregroundStyle(Palette.text.color).fixedSize(horizontal: false, vertical: true)
                 Text(d.weightNote).font(.caption2).foregroundStyle(Palette.text3.color)
+            }
+            if let c = d.conflict { ConflictNote(text: c + "; Moodle's date is shown") }
+            if let also = d.alsoMentioned {
+                Text("Also mentioned in: \(also)").font(.caption2).foregroundStyle(Palette.text3.color).fixedSize(horizontal: false, vertical: true)
             }
             Text(([d.kind.map { sentence($0.label) }].compactMap { $0 } + [source]).joined(separator: " · "))
                 .font(.caption2).foregroundStyle(Palette.text3.color)
@@ -322,6 +327,17 @@ struct BoardButton<Label: View>: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+    }
+}
+
+/// "⚠ Post on Thu 29 Oct says moved to Wed 4 Nov": warning icon + text, never colour alone.
+private struct ConflictNote: View {
+    let text: String
+    var body: some View {
+        Label { Text(text).foregroundStyle(Palette.text2.color) } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(amber)
+        }
+        .font(.caption2).fixedSize(horizontal: false, vertical: true)
     }
 }
 

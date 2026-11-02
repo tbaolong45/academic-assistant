@@ -480,6 +480,9 @@ extension Moodle {
     private static let time = try! NSRegularExpression(pattern: #"(?i)\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(\d{1,2}):(\d{2})\b"#)
     private static let dateOnly = try! NSRegularExpression(pattern: #"(?i)^(?:"# + mon + #"\.?\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s+"# + mon + #")$"#)
 
+    /// A sentence saying a date moved: "postponed to", "pushed back until", "extended till", "moved from 20 Oct to".
+    static let moveCue = #"(?i)\b(moved|postponed|pushed(?: back)?|extended|rescheduled|delayed|shifted|changed)\b[^.]{0,60}?\b(to|until|till)\b"#
+
     static func mentionedDates(_ text: String, posted: Date, source: CourseEvent.Source, strict: Bool = false, via: Origin? = nil) -> [CourseEvent] {
         let cal = Calendar.current
         var out: [CourseEvent] = []
@@ -502,15 +505,15 @@ extension Moodle {
             let ns = sentence as NSString, all = NSRange(location: 0, length: ns.length)
             func g(_ m: NSTextCheckingResult, _ i: Int) -> String? { m.range(at: i).location == NSNotFound ? nil : ns.substring(with: m.range(at: i)) }
             func monthIndex(_ s: String) -> Int? { months.firstIndex { s.lowercased().hasPrefix($0) }.map { $0 + 1 } }
-            var found: [(day: Int, month: Int, year: Int?)] = []
-            for m in dayMonth.matches(in: sentence, range: all) { if let d = Int(g(m, 1) ?? ""), let mo = monthIndex(g(m, 2) ?? "") { found.append((d, mo, g(m, 3).flatMap(Int.init))) } }
-            for m in monthDay.matches(in: sentence, range: all) { if let d = Int(g(m, 2) ?? ""), let mo = monthIndex(g(m, 1) ?? "") { found.append((d, mo, g(m, 3).flatMap(Int.init))) } }
+            var found: [(day: Int, month: Int, year: Int?, at: Int)] = [] // `at`: UTF-16 offset in the sentence
+            for m in dayMonth.matches(in: sentence, range: all) { if let d = Int(g(m, 1) ?? ""), let mo = monthIndex(g(m, 2) ?? "") { found.append((d, mo, g(m, 3).flatMap(Int.init), m.range.location)) } }
+            for m in monthDay.matches(in: sentence, range: all) { if let d = Int(g(m, 2) ?? ""), let mo = monthIndex(g(m, 1) ?? "") { found.append((d, mo, g(m, 3).flatMap(Int.init), m.range.location)) } }
             // 2: "average was 9/10" is a score, not 9 October
             let scoreTalk = sentence.range(of: #"(?i)\b(score[sd]?|grade[sd]?|marks?|average|points|out of|got)\b"#, options: .regularExpression) != nil
             for m in numeric.matches(in: sentence, range: all) {
                 // Strict (documents): "2/3" in maths is not a date, so numbers need a year ("23/10/2026").
                 if let d = Int(g(m, 1) ?? ""), let mo = Int(g(m, 2) ?? ""), (1...12).contains(mo), (!strict && !scoreTalk) || g(m, 3) != nil {
-                    found.append((d, mo, g(m, 3).flatMap(Int.init).map { $0 < 100 ? 2000 + $0 : $0 }))
+                    found.append((d, mo, g(m, 3).flatMap(Int.init).map { $0 < 100 ? 2000 + $0 : $0 }, m.range.location))
                 }
             }
             // Relative words are resolved against the post date: today/tonight, tomorrow, a weekday ("Tuesday" = the next one
@@ -528,9 +531,17 @@ extension Moodle {
                     if m.1 != nil, monWeek.isDate(d, equalTo: postedDay, toGranularity: .weekOfYear) { d = cal.date(byAdding: .day, value: 7, to: d) ?? d }
                     relative = d
                 }
-                if let r = relative { let c = cal.dateComponents([.year, .month, .day], from: r); found.append((c.day!, c.month!, c.year!)) }
+                if let r = relative {
+                    let c = cal.dateComponents([.year, .month, .day], from: r)
+                    let at = ns.range(of: #"(?i)\b(today|tonight|this evening|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b"#,
+                                      options: .regularExpression).location
+                    found.append((c.day!, c.month!, c.year!, at))
+                }
             }
             guard !found.isEmpty else { continue }
+            // "Moved from 20 Oct to 1 Nov" (§2.3): the dates after the cue are the new ones; those before it are the old ones.
+            let cue = ns.range(of: Self.moveCue, options: .regularExpression)
+            let cueEnd = cue.location == NSNotFound ? nil : cue.location + cue.length
             var hour = 23, minute = 59 // a date with no time is a "by the end of that day" deadline
             func hasDate(_ s: String) -> Bool {
                 let r = NSRange(s.startIndex..., in: s)
@@ -551,11 +562,12 @@ extension Moodle {
             for next in parts.dropFirst(i + 1).prefix(2) { if hasDate(next) { break }; places.append(next) }
             if let (h, mi) = places.lazy.compactMap(clock).first { hour = h; minute = mi }
             let postedYear = cal.component(.year, from: posted)
-            for f in found where (1...31).contains(f.day) {
+            for f in found where (1...31).contains(f.day) && f.at >= cueEnd ?? 0 {
                 guard var when = cal.date(from: DateComponents(year: f.year ?? postedYear, month: f.month, day: f.day, hour: hour, minute: minute)),
                       cal.component(.day, from: when) == f.day else { continue }
                 if f.year == nil, when < posted.addingTimeInterval(-30 * 86_400), let next = cal.date(byAdding: .year, value: 1, to: when) { when = next }
-                out.append(CourseEvent(title: String(context.prefix(110)), date: when, source: source, detail: context, via: via, posted: posted))
+                out.append(CourseEvent(title: String(context.prefix(110)), date: when, source: source, detail: context, via: via, posted: posted,
+                                       moved: cueEnd == nil ? nil : true))
             }
         }
         return out
