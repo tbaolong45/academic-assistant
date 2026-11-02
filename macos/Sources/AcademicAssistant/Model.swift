@@ -575,6 +575,23 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
         Moodle.namedDays(d.title + (d.source != nil && ![.coursePage, .pdf].contains(d.resolvedVia) ? " " + (d.detail ?? "") : ""))
     }
     var refDates = items.map { d in d.ref.map { [$0: d.date] } ?? [:] } // per cluster root (F1e #3)
+    // F1g: anchors (Moodle activities and assessments, syllabus placeholders included) keep the 3-day window; everything
+    // else merges only on the same local day or within 12 h, unless the newer one supersedes (a stated move, ≤ 30 days).
+    let anchor = items.map { [.moodleActivity, .syllabus].contains($0.resolvedVia) }
+    var loose = items.indices.map { anchor[$0] ? [] : [$0] } // per cluster root: its non-anchor members
+    // F1g rule 6: a title naming a range of up to 7 days ("1-2 Dec") is on every day of it. Own title only.
+    let cal = Calendar.current
+    let onDays: [Set<Date>] = items.map { d in
+        let own = cal.startOfDay(for: d.date), year = cal.component(.year, from: d.date)
+        let named = Moodle.namedDays(d.title).compactMap { md -> Date? in
+            let p = md.split(separator: "/").compactMap { Int($0) }
+            guard p.count == 2 else { return nil } // weekdays don't make a range
+            return [year - 1, year, year + 1].compactMap { cal.date(from: DateComponents(year: $0, month: p[0], day: p[1])) }
+                .min { abs($0.timeIntervalSince(own)) < abs($1.timeIntervalSince(own)) }
+        }
+        guard named.count >= 2, let lo = named.min(), let hi = named.max(), hi.timeIntervalSince(lo) <= 7 * 86_400 else { return [own] }
+        return Set(named).union([own])
+    }
     var parent = Array(items.indices)
     var nums = numbers, activity = items.map { $0.resolvedVia == .moodleActivity } // per cluster root
     func root(_ i: Int) -> Int {
@@ -587,6 +604,13 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
     func movedAfter(_ m: Int, _ o: Int) -> Bool {
         items[m].moved == true && (items[o].posted ?? .distantPast) < (items[m].posted ?? .distantFuture)
     }
+    /// Rules 2, 3 and 6 of F1g, on dates alone: same local day (a short range counts on each of its days) or 12 h apart,
+    /// or one supersedes the other within 30 days.
+    func close(_ i: Int, _ j: Int) -> Bool {
+        let gap = abs(items[i].date.timeIntervalSince(items[j].date))
+        return gap <= 12 * 3600 || !onDays[i].isDisjoint(with: onDays[j])
+            || (gap <= 30 * 86_400 && (movedAfter(i, j) || movedAfter(j, i)))
+    }
     func same(_ i: Int, _ j: Int) -> Bool {
         let (a, b) = (items[i], items[j])
         let shared = words[i].intersection(words[j]).count
@@ -594,7 +618,8 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
         guard a.subject.id == b.subject.id || (general && shared >= 2) else { return false }
         // Rows of one schedule ("Dec 8 — Presentation", "Dec 10 — Presentation") are separate dates, not repeated mentions.
         if let r = a.ref, r == b.ref, a.date != b.date { return false }
-        // F1e #1: two events of one calendar with different ids are two events ("Seminar" on 20 and 22 Oct).
+        // F1e #1: two events of one calendar with different ids are two events ("Seminar" on 20 and 22 Oct). It needs both
+        // refs: events cached before B2 have none, and they get one at the next sync (F1g #4).
         if a.resolvedVia == b.resolvedVia, [.moodleCalendar, .outlookCalendar].contains(a.resolvedVia),
            let ra = a.ref, let rb = b.ref, ra != rb, a.moved != true, b.moved != true { return false }
         // F1e #2: different named days are different items ("No classes on Monday" / "… on Tuesday"), unless the newer
@@ -604,7 +629,7 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
             guard new.moved == true, old.moved != true else { return false }
         }
         let gap = abs(a.date.timeIntervalSince(b.date))
-        guard gap <= 3 * 86_400 || (gap <= 30 * 86_400 && (movedAfter(i, j) || movedAfter(j, i))) else { return false }
+        guard (anchor[i] || anchor[j]) && gap <= 3 * 86_400 || close(i, j) else { return false } // F1g rules 1-3
         if titles[i] == titles[j] || sameItem(titles[i], titles[j]) || sameItem(titles[j], titles[i]) { return true } // fast path
         return shared >= max(1, min(2, words[i].count, words[j].count))
             && (numbers[i].isEmpty || numbers[j].isEmpty || numbers[i] == numbers[j]) // "Quiz 3" ≠ "Quiz 4"
@@ -615,11 +640,13 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
             guard a != b,
                   !(activity[a] && activity[b]), // two Moodle activities are two submissions, never one item
                   nums[a].isEmpty || nums[b].isEmpty || nums[a] == nums[b], // a numberless post can't chain Quiz 3 to Quiz 4
-                  refDates[b].allSatisfy({ r, t in refDates[a][r].map { $0 == t } ?? true }) // F1e #3: no ref at two dates via a bridge
+                  refDates[b].allSatisfy({ r, t in refDates[a][r].map { $0 == t } ?? true }), // F1e #3: no ref at two dates via a bridge
+                  loose[a].allSatisfy({ x in loose[b].allSatisfy { close(x, $0) } }) // F1g rule 4: non-anchors pair up directly
             else { continue }
             parent[b] = a
             nums[a].formUnion(nums[b])
             refDates[a].merge(refDates[b]) { x, _ in x }
+            loose[a] += loose[b]
             activity[a] = activity[a] || activity[b]
         }
     }

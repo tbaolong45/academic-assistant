@@ -497,8 +497,10 @@ extension Moodle {
         return out
     }
 
-    /// A sentence saying a date moved: "postponed to", "pushed back until", "extended till", "moved from 20 Oct to".
-    static let moveCue = #"(?i)\b(moved|postponed|pushed(?: back)?|extended|rescheduled|delayed|shifted|changed)\b[^.]{0,60}?\b(to|until|till)\b"#
+    /// A sentence saying a date moved: "postponed to", "pushed back until", "moved from 20 Oct to". Base, past and -ing
+    /// forms ("approval to reschedule our classes to Fri 9 Oct"); "to/until" must be followed by a date word, so "changed
+    /// to the new room" isn't a move (deadline-priority.md §2.3).
+    static let moveCue = #"(?i)\b(mov(?:e|ed|ing)|postpon(?:e|ed|ing)|push(?:ed)?(?: back)?|extend(?:ed)?|reschedul(?:e|ed|ing)|delay(?:ed)?|shift(?:ed)?|chang(?:e|ed))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d|(?:mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow|tonight|next)[a-z]*\b)"#
 
     static func mentionedDates(_ text: String, posted: Date, source: CourseEvent.Source, strict: Bool = false, via: Origin? = nil) -> [CourseEvent] {
         let cal = Calendar.current

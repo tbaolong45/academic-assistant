@@ -148,13 +148,13 @@ enum Summarizer {
     static func targets(_ subjects: [Subject], board: [BoardItem], titles: [String: Summary],
                         window: ClosedRange<Date>) -> [(course: String, event: CourseEvent)] {
         var hidden = Set<String>()
-        for d in board {
+        for d in board { // members behind an anchor (a Moodle activity or assessment) show its title, not their own
             if d.hidden { hidden.insert(d.id) }
-            if d.hidden || d.resolvedVia == .moodleActivity { hidden.formUnion(d.alsoIn.map(\.id)) }
+            if d.hidden || [.moodleActivity, .syllabus].contains(d.resolvedVia) { hidden.formUnion(d.alsoIn.map(\.id)) }
         }
         var seen = Set<String>()
         return subjects.flatMap { s in (s.events ?? []).map { (s, $0) } }
-            .filter { s, e in window.contains(e.date) && e.kind?.isDated != false && titles[id(e)] == nil
+            .filter { s, e in window.contains(e.date) && e.kind?.isDated != false && hasContent(e.title) && titles[id(e)] == nil
                 && !hidden.contains(Deadline.eventID(s, e)) && seen.insert(id(e)).inserted }
             .map { (course: $0.0.name, event: $0.1) }
     }

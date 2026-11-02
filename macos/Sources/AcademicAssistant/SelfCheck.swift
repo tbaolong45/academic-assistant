@@ -932,8 +932,11 @@ func runSelfCheck() -> Never {
     let bridgeFirst = b4("Final Presentation", b3At(2026, 10, 27), via: .pdf, ref: "schedule.pdf")
     let bridgeSecond = b4("Final Presentation", b3At(2026, 10, 29), via: .pdf, ref: "schedule.pdf")
     let bridgeNews = b4("Final Presentation", b3At(2026, 10, 28), posted: b3At(2026, 10, 27))
-    check(cluster([bridgeFirst, bridgeSecond, bridgeNews]).count == 2,
-          "cluster: a news mention can't chain one PDF ref at two dates into one cluster")
+    let bridged = cluster([bridgeFirst, bridgeSecond, bridgeNews])
+    check(bridged.count == 3 && !bridged.contains { d in
+        (d.date == bridgeFirst.date || d.alsoIn.contains { $0.date == bridgeFirst.date })
+            && (d.date == bridgeSecond.date || d.alsoIn.contains { $0.date == bridgeSecond.date })
+    }, "cluster: a news mention can't chain one PDF ref at two dates into one cluster")
 
     // F1f #5: holidays named in one label keep their own dates; the day rule reads titles, not the shared sentence.
     let holidayLabel = "On the course page: Commemoration Day 30 Nov. UAE National Day 1-2 Dec."
@@ -993,8 +996,48 @@ func runSelfCheck() -> Never {
           && rankingFilter.hideUnsure,
           "filter: Do next follows the course and unsure filters only, not type or origin")
     check(Moodle.namedDays("1-2 Dec") == ["12/1", "12/2"], "dates: a range '1-2 Dec' names both days")
+    var variantFilter = BoardFilter()
+    variantFilter.group = .submit
+    variantFilter.types = [.exam]
+    variantFilter.origins = [.pdf]
+    variantFilter.showHidden = true
+    let rankingItems = variantFilter.forRanking.apply(filterItems)
+    check(variantFilter.forRanking == BoardFilter()
+          && doNext(rankingItems, now: b3Now).map(\.id) == doNext(filterItems, now: b3Now).map(\.id)
+          && crunch(rankingItems, now: b3Now)?.weight == crunch(filterItems, now: b3Now)?.weight,
+          "filter: group, type, origin and showHidden never change Do next or crunch")
 
-    // F1g: non-anchor members only merge on the same day (the anchor rule is tested once it lands).
+    // F1g: text mentions only merge on the same local day; Moodle items are anchors with the 3-day window.
+    check(cluster([b4("Quiz 3 on 23/10", b3At(2026, 10, 23)), b4("Quiz 3 on 25/10", b3At(2026, 10, 25))]).count == 2,
+          "cluster: 'Quiz 3 on 23/10' and 'on 25/10' stay two cards")
+    check(cluster([b4("Quiz tomorrow", b3At(2026, 10, 27), posted: b3At(2026, 10, 26)),
+                   b4("Quiz today", b3At(2026, 10, 28), posted: b3At(2026, 10, 28))]).count == 2,
+          "cluster: 'Quiz tomorrow' from Monday and 'Quiz today' from Wednesday stay two cards")
+    let cueYes = ["reschedule our Calculus 1 classes to Friday, 9 October", "moved from 20 Oct to 1 Nov",
+                  "extended to 4 Nov", "postponed until next Monday", "changed to Wednesday 3 pm",
+                  "moved to the 1st of November"]
+    let cueNo = ["the rescheduled lab is still on Tuesday, next to the library", "Quiz moved to week 9",
+                 "We will move to the new room on Tuesday", "the room has changed to the new building"]
+    let cueMissed = cueYes.filter { $0.range(of: Moodle.moveCue, options: .regularExpression) == nil }
+    let cueFalse = cueNo.filter { $0.range(of: Moodle.moveCue, options: .regularExpression) != nil }
+    check(cueMissed.isEmpty && cueFalse.isEmpty,
+          "cluster: move cues take base/-ing verbs and need a date after to/until (missed: \(cueMissed), false: \(cueFalse))")
+    let rescheduleEvent = Moodle.mentionedDates(
+        "…make-up classes scheduled for Saturday, 10 October 2026, I have obtained approval to reschedule our classes to Friday, 9 October 2026",
+        posted: b3At(2026, 9, 28), source: .announcement, via: .news)
+    check(rescheduleEvent.count == 1 && b4Is(rescheduleEvent[0].date, 2026, 10, 9) && rescheduleEvent[0].moved == true,
+          "cluster: 'reschedule … to Friday, 9 October' keeps only 9 Oct and marks it moved (got \(rescheduleEvent.map { "\($0.title) moved=\($0.moved ?? false)" }))")
+    let shortRangePage = b4("1-2 Dec National Day", b3At(2026, 12, 2), via: .coursePage, ref: "label")
+    let shortRangePDF = b4("Dec 1 National Day", b3At(2026, 12, 1), via: .pdf, ref: "schedule.pdf")
+    check(cluster([shortRangePage, shortRangePDF]).count == 1,
+          "cluster: a ≤7-day range in the item's own title counts as the same day")
+    let longRangePage = b4("1-9 Dec National Day", b3At(2026, 12, 9), via: .coursePage, ref: "label")
+    check(cluster([longRangePage, shortRangePDF]).count == 2,
+          "cluster: an 8-day range is not a same day, so the pair stays two cards")
+    let seminarActivity = b4("Seminar", b3At(2026, 10, 21), via: .moodleActivity)
+    let seminarClusters = cluster([seminarActivity, b4("Seminar", b3At(2026, 10, 20), via: .moodleCalendar, ref: "41"),
+                                   b4("Seminar", b3At(2026, 10, 22), via: .moodleCalendar, ref: "42")])
+    check(seminarClusters.count == 2, "cluster: the Moodle Seminar activity merges with at most one calendar event (got \(seminarClusters.count))")
     check(cluster([b4("Class cancelled Monday", b3At(2026, 11, 2)), b4("Class cancelled Tuesday", b3At(2026, 11, 3))]).count == 2,
           "cluster: 'Class cancelled' on Monday and Tuesday stay two cards")
     check(cluster([b4("TED Script due 1 Nov", b3At(2026, 11, 1, 23, 59)),
@@ -1074,6 +1117,11 @@ func runSelfCheck() -> Never {
     let p9DoneSubject = p9Subject(.submitted)
     let p9OpenTargets = Summarizer.targets([p9OpenSubject], board: boardItems([p9OpenSubject]), titles: [:], window: p9Window)
     let p9DoneTargets = Summarizer.targets([p9DoneSubject], board: boardItems([p9DoneSubject]), titles: [:], window: p9Window)
+    let p9Bare = CourseEvent(title: "Dec 8 — -", date: p9When, source: .announcement, via: .news)
+    let p9BareSubject = Subject(id: "p9b", name: "P9B", code: "P9B", hue: .green, assessments: [], assignments: [],
+                                materials: [], announcements: [], events: [p9Bare])
+    check(Summarizer.targets([p9BareSubject], board: boardItems([p9BareSubject]), titles: [:], window: p9Window).isEmpty,
+          "summarizer: an event with no content ('Dec 8 — -') never gets a request")
     check(p9OpenTargets.isEmpty && p9DoneTargets.count == 1 && p9DoneTargets[0].event.title == p9Event.title,
           "summarizer: a post behind an open Moodle assignment isn't summarized; once submitted it is (got \(p9OpenTargets.count) / \(p9DoneTargets.count))")
 

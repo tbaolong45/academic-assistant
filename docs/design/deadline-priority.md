@@ -200,6 +200,7 @@ Clustering runs per subject over all items: union-find on pairs, with n ≈ a fe
   3. **Supersede.** The one exception to rule 2 is the existing supersede case: the newer-posted member has a stated move cue, up to 30 days.
   4. **No bridging.** Every two non-anchor members of one cluster must satisfy rule 2 or 3 *directly*. A union that would break this is refused, like the number-set and ref guards. So no third item can chain two calendar events, two days or two dates together, through a news post or through an anchor.
   5. The day-set, ref, calendar-ref and number guards stay as a second net.
+  6. **Ranges.** An item whose title names a range of days (`namedDays` gives several days, e.g. "1-2 Dec" → {1 Dec, 2 Dec}, span ≤ 7 days) counts as "same day" on any day in it. So the course-page "1-2 Dec National Day" and the PDF row "Dec 1 — National Day" merge.
 - Against the existing checks:
   - B4 (a), (f), (h) are anchor pairs; (d) is a supersede; (b), (c), (e), (g) are unaffected.
   - F1e's cases all hold.
@@ -213,7 +214,12 @@ TED example: "TED-Talk Script (8%)" gives {ted, talk, script}. "TED Script due 1
 
 `Moodle.mentionedDates` checks the sentence around each date for a move cue:
 
-`(?i)\b(moved|postponed|pushed(?: back)?|extended|rescheduled|delayed|shifted|changed)\b[^.]{0,60}?\b(to|until|till)\b`
+`(?i)\b(mov(?:e|ed|ing)|postpon(?:e|ed|ing)|push(?:ed)?(?: back)?|extend(?:ed)?|reschedul(?:e|ed|ing)|delay(?:ed)?|shift(?:ed)?|chang(?:e|ed))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d|(?:mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|today|tomorrow|tonight|next)[a-z]*\b)`
+
+(Revised in F1g:
+- Verb stems now also match the base and -ing forms, as in "approval to reschedule our classes to Fri 9 Oct".
+- The "to" must be followed by a date word, so "moved to LH1" and "next to the library" are no longer cues.
+- On the 1,901 cached sentences, 5 change: 2 real moves gained and 3 false cues removed.)
 
 - If the cue matches and the date follows it, set `moved = true`.
 - Dates in the same sentence before the cue ("moved **from 20 Oct** to 1 Nov") are dropped.

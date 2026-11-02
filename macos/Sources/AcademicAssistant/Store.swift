@@ -80,8 +80,12 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     /// Marks the item's whole cluster (every member key), or clears the mark with nil.
     func mark(_ d: Deadline, _ state: Mark.State?, until: Date? = nil) {
         guard canMark else { return }
+        let keys = d.clusterKeys.map(BoardState.key)
+        if state == nil, let old = d.mark { // restore: also the keys of members that have left the cluster since (F1g #6)
+            marks = marks.filter { $0.value != old }
+        }
         let m = state.map { Mark(state: $0, until: until, itemDate: d.date, at: .now) }
-        for k in d.clusterKeys { marks[BoardState.key(k)] = m }
+        for k in keys { marks[k] = m }
         save { try BoardState.save(marks) }
         applyBoardMarks()
     }
@@ -150,11 +154,12 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
             publish()
             if let previous, result.warnings.isEmpty, !lastSyncPartial { Notifier.post(Notifier.changes(old: previous, new: result.subjects)) }
             lastSyncPartial = !result.warnings.isEmpty
-            await downloadMaterials(token: creds.token)
-            await scanDocuments(gen)
-            // Only a complete board says an item is gone: after the PDF scan, and never after a sync with warnings
-            // (a course whose call failed is missing, and its marks are still live).
-            if result.warnings.isEmpty, Self.isCurrent(generation: gen, current: generation) { pruneBoardMarks() }
+            let downloaded = await downloadMaterials(token: creds.token)
+            let scanned = await scanDocuments(gen)
+            // Only a complete board says an item is gone: every configured source must have come through (Moodle with no
+            // warnings, Outlook, mail, the file downloads and this generation's PDF scan); otherwise its marks are still live.
+            let complete = result.warnings.isEmpty && (!hasOutlookLink || items != nil) && (!hasMail || fetched != nil) && downloaded && scanned
+            if complete, Self.isCurrent(generation: gen, current: generation) { pruneBoardMarks() }
         case .failure(let error):
             publish() // Outlook or mail may still be new
             if !Task.isCancelled { syncError = error.localizedDescription }
@@ -162,23 +167,27 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     }
 
     /// After each sync: fetch course files that aren't on disk yet into ~/Documents/Academic Assistant.
-    private func downloadMaterials(token: String) async {
+    /// Returns false when any file failed (its PDF dates, and the marks on them, may be missing).
+    @discardableResult private func downloadMaterials(token: String) async -> Bool {
         downloading = true
         defer { downloading = false; filesVersion += 1 }
         let r = await MaterialStore.downloadMissing(subjects, token: token)
         downloadNote = r.failed.isEmpty ? (r.fetched > 0 ? "\(r.fetched) new file\(r.fetched == 1 ? "" : "s") saved" : nil)
                                         : "\(r.fetched) saved, \(r.failed.count) failed"
+        return r.failed.isEmpty
     }
 
     /// Dates found in the downloaded syllabus/schedule PDFs (replacing older ones), then Jev and DeepSeek on anything new.
-    private func scanDocuments(_ gen: Int) async {
+    /// Returns false when a newer sync or a disconnect made the scan stale.
+    @discardableResult private func scanDocuments(_ gen: Int) async -> Bool {
         let current = subjects
         let found = await Task.detached(priority: .utility) { MaterialStore.documentEvents(current) }.value
-        guard Self.isCurrent(generation: gen, current: generation) else { return }
+        guard Self.isCurrent(generation: gen, current: generation) else { return false }
         docs = found
         publish()
         classify() // last steps of every sync: everything new is on hand now
         summarize()
+        return true
     }
 
     /// Sends every announcement and dated item Jev hasn't seen yet (text only), then labels them.
