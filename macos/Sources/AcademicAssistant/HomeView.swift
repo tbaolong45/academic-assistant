@@ -142,8 +142,8 @@ struct HomeView: View {
         // Only graded work shows a weight (a neutral tag); events (talks, office hours, class changes) say what they are.
         let trailing = HStack(spacing: 10) {
             Text(when).font(.callout).foregroundStyle(Palette.text2.color).monospacedDigit()
-            if let w = item.weight {
-                Text("\(w)%").font(.caption.weight(.semibold)).foregroundStyle(Palette.text2.color).monospacedDigit()
+            if item.showsWeight {
+                Text(item.weighting.tag).font(.caption.weight(.semibold)).foregroundStyle(Palette.text2.color).monospacedDigit()
                     .padding(.horizontal, 8).padding(.vertical, 3).background(Palette.raised.color, in: Capsule())
             } else if let k = item.kind {
                 Text(k.label.prefix(1) + k.label.dropFirst().lowercased()).font(.caption).foregroundStyle(Palette.text3.color)
@@ -166,7 +166,7 @@ struct HomeView: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 ? item.id : (hovered == item.id ? nil : hovered) }
         .stagger(i + 3)
-        .accessibilityLabel("\(s.name), \(item.label)\(type), \(when)\(item.weight.map { ", \($0)% of grade" } ?? "")")
+        .accessibilityLabel("\(s.name), \(item.label)\(type), \(when)\(item.showsWeight ? ", \(item.weighting.tag) of grade" : "")")
     }
 
     // MARK: Formatting

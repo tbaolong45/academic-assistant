@@ -300,15 +300,21 @@ struct Weighting: Equatable, Sendable {
     let value: Double, from: From
     var spare = false // a syllabus item that may end up dropped ("7.5% if it counts")
     var estimate: Bool { from == .typical }
-    var text: String {
-        let n = value == value.rounded() ? "\(Int(value))%" : String(format: "%.1f%%", value)
-        return estimate ? "~\(n) est." : spare ? "\(n) if it counts" : n
-    }
+    private var number: String { value == value.rounded() ? "\(Int(value))%" : String(format: "%.1f%%", value) }
+    /// The reason line's wording: "12%", "7.5% if it counts", "~5% est."
+    var text: String { estimate ? "~\(number) est." : spare ? "\(number) if it counts" : number }
+    /// Card tags (§1.4.1): "12%", "≤ 7.5%" for a spare, "~5%" for an estimate. Never a misleading "0%".
+    var tag: String { estimate ? "~\(number)" : spare ? "≤ \(number)" : number }
+    /// What counts toward crunch's 30% rule: known weights only; a spare or a typical guess adds 0.
+    var known: Double { estimate || spare ? 0 : value }
 }
 
 enum Ranking {
     static let hoursPerDay = 3.0 // H: focused hours a day on one item
     static let horizonDays = 28.0 // Do next ranks what's due this far ahead (T4), not just the board's week
+    /// Overdue work with no cutoff stays in Do next this long past due (§1.4). P6's `needsStatus` stops checking the
+    /// submission status at the same point, after which the app can't know the work is still open.
+    static let overdueDays = 14.0
 
     static func typicalWeight(_ t: AssessmentType?) -> Double {
         switch t {
@@ -353,7 +359,10 @@ func syllabusPerItem(_ code: String, _ name: String) -> Double? {
 }
 
 extension Deadline {
-    var weighting: Weighting { givenWeight ?? Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: title, type: type) }
+    /// `deadlines()` always sets `givenWeight`; a Deadline made by hand with only `weight` treats it as known.
+    var weighting: Weighting { givenWeight ?? Ranking.weighting(moodle: weight, syllabus: nil, spare: nil, title: title, type: type) }
+    /// Graded work and exams carry a weight tag; talks, class changes and other events don't.
+    var showsWeight: Bool { toSubmit || kind == .exam }
     var effortHours: Double { Ranking.effortHours(type, weight: weighting.value) }
     /// Days you can still wait before starting: time left minus the work, at H focused hours a day.
     func slack(now: Date) -> Double { date.timeIntervalSince(now) / 86_400 - effortHours / Ranking.hoursPerDay }
@@ -410,12 +419,14 @@ extension Deadline {
 }
 
 /// Do next (§1.4, D2): the top items by priority among work to hand in and exams due within 28 days. An open Moodle
-/// assignment past its due date stays, as overdue, until its cutoff closes it. Ties go to the earlier date.
+/// assignment past its due date stays, as overdue, until its cutoff closes it, or with no cutoff for 14 days past due
+/// (then it stays on the board only). Ties go to the earlier date.
 func doNext(_ items: [Deadline], now: Date, limit: Int = 3) -> [Deadline] {
     let end = now.addingTimeInterval(Ranking.horizonDays * 86_400)
     return Array(items.filter { d in
         guard d.toSubmit || d.kind == .exam, d.date < end, !d.isClosed(now: now) else { return false }
-        return d.date >= now || (d.toSubmit && d.resolvedVia == .moodleActivity)
+        return d.date >= now || (d.toSubmit && d.resolvedVia == .moodleActivity
+            && (d.cutoff != nil || now.timeIntervalSince(d.date) <= Ranking.overdueDays * 86_400))
     }
     .sorted { a, b in
         let (pa, pb) = (a.priority(now: now), b.priority(now: now))

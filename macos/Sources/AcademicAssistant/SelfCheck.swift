@@ -787,6 +787,51 @@ func runSelfCheck() -> Never {
           && overdue.reason(now: b3Nov2, calendar: b3Cal).contains("overdue"),
           "ranking: past due but before the cutoff is 'late until …'; past the cutoff it leaves Do next; no cutoff stays overdue")
 
+    // MARK: - F1d: kinds, tags, ordinals, overdue, crunch
+
+    let kindCases: [(String, AssessmentType)] = [
+        ("Critical Writing - Final Paper - 14%", .assignment), ("Final Project Presentation", .project),
+        ("Final Exam", .final), ("Final", .final), ("Midterm exam", .midterm), ("Final exam paper", .final),
+    ]
+    let kindWrong = kindCases.filter { Moodle.kind(nil, $0.0) != $0.1 }
+    check(kindWrong.isEmpty, "kind: hand-in words beat 'final'/'midterm' (wrong: \(kindWrong.map { "\($0.0) → \(Moodle.kind(nil, $0.0))" }))")
+    let bareDate = CourseEvent(title: "Dec 8 — -", date: b3Now.addingTimeInterval(-86_400), source: .announcement, via: .news)
+    let quizA = CourseEvent(title: "Quiz 3", date: b3Now.addingTimeInterval(86_400), source: .announcement, via: .news)
+    let quizB = CourseEvent(title: "Quiz 3", date: b3Now.addingTimeInterval(2 * 86_400), source: .announcement, via: .news)
+    let keysWithoutBare = memberKeys([quizA, quizB], subject: "s")
+    let keysWithBare = memberKeys([bareDate, quizA, quizB], subject: "s")
+    check(Array(keysWithBare.dropFirst()) == keysWithoutBare && keysWithBare.first?.hasSuffix("/-") == true,
+          "b2: a bare-date line takes no ordinal and doesn't shift the visible items' memberKeys (got \(keysWithBare))")
+    let closedItem = b3Deadline("Closed one", b3Now.addingTimeInterval(3 * 3600), 5, .assignment, cutoff: b3Now.addingTimeInterval(-60))
+    let twoOpen = [b3Deadline("A", b3Now.addingTimeInterval(3600), 5, .assignment),
+                   b3Deadline("B", b3Now.addingTimeInterval(7200), 5, .assignment)]
+    check(crunch(twoOpen, now: b3Now) == nil && crunch(twoOpen + [closedItem], now: b3Now) == nil,
+          "crunch: a closed assignment doesn't count toward the 3-in-48-h rule")
+    let noWeightTag = Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: "Problem sheet 7", type: .assignment).tag
+    let spareTag = Ranking.weighting(moodle: nil, syllabus: nil, spare: 7.5, title: "Quiz 5", type: .quiz).tag
+    check(noWeightTag == "~5%" && spareTag == "≤ 7.5%",
+          "tags: a weightless Moodle item reads ~N%, never 0%; a spare reads ≤ 7.5% (got \(noWeightTag) / \(spareTag))")
+    func guess(_ title: String, _ date: Date) -> Deadline {
+        Deadline(id: title, subject: b3LA, title: title, date: date, weight: nil, kind: .deadline, type: .assignment)
+    }
+    let threeGuesses = (0..<3).map { guess("Guess \($0)", b3Now.addingTimeInterval(Double($0) * 3600 + 3600)) }
+    let guessCrunch = crunch(threeGuesses, now: b3Now)
+    let heavy = Deadline(id: "Final paper", subject: b3LA, title: "Final paper", date: b3Now.addingTimeInterval(10 * 86_400),
+                         weight: 30, kind: .deadline, type: .final, givenWeight: Weighting(value: 30, from: .syllabus))
+    let heavyCrunch = crunch([heavy], now: b3Now)
+    check(guessCrunch?.items.count == 3 && guessCrunch?.weight == 0 && heavyCrunch?.weight == 30,
+          "crunch: three ~5% estimates fire on the count rule with 0% weight; one 30% syllabus item fires on weight")
+    let late13 = AssignmentItem(title: "Late work", due: b3Now.addingTimeInterval(-13 * 86_400), status: .open)
+    let late15 = AssignmentItem(title: "Too late", due: b3Now.addingTimeInterval(-15 * 86_400), status: .open)
+    let late20 = AssignmentItem(title: "Still open", due: b3Now.addingTimeInterval(-20 * 86_400), status: .open,
+                                cutoff: b3Now.addingTimeInterval(86_400))
+    let lateSubject = Subject(id: "late", name: "Late", code: "LATE", hue: .green, assessments: [],
+                              assignments: [late13, late15, late20], materials: [], announcements: [])
+    let lateBoard = boardItems([lateSubject])
+    let lateNext = doNext(lateBoard, now: b3Now).map(\.title)
+    check(lateBoard.count == 3 && Set(lateNext) == ["Late work", "Still open"] && !lateNext.contains("Too late"),
+          "ranking: overdue work stays in Do next for 14 days (13 ✓, 15 ✗) or until its cutoff (20 days + cutoff ✓); got \(lateNext)")
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.

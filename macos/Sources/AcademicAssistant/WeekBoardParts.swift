@@ -32,7 +32,7 @@ private func timeLeft(_ date: Date, now: Date) -> String {
 private func spoken(_ d: Deadline, now: Date) -> String {
     let late = d.date < now ? "overdue, " : ""
     return "\(d.subject.name), \(d.headline), \(late)due \(weekday(d.date, .wide)) \(hhmm(d.date))"
-        + (d.weight.map { ", \($0)% of grade" } ?? "")
+        + (d.showsWeight ? ", \(d.weighting.tag) of grade" : "")
 }
 
 // MARK: - Day column
@@ -130,8 +130,8 @@ private struct DeadlineCard: View {
 
     var body: some View {
         let d = deadline, p = d.subject.hue.palette
-        let big = (d.weight ?? 0) >= 15
-        let weight = d.weight.map { Tag(text: "\($0)%") } // neutral; events carry no grade
+        let big = d.weighting.known >= 15
+        let weight = d.showsWeight ? Tag(text: d.weighting.tag) : nil // neutral; events carry no grade
         let when = Group {
             if d.date < now && d.source != nil { Tag(text: "Past") } // a mentioned/calendar/document date that has passed: info, not a missed task
             else if d.isClosed(now: now) { Tag(text: "Closed") } // past the cutoff: Moodle no longer takes it
@@ -226,7 +226,7 @@ struct DeadlinePreview: View {
             HStack(spacing: 6) {
                 Tag(text: d.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))
                 Tag(text: d.date < now ? "Past" : "in " + timeLeft(d.date, now: now))
-                if let w = d.weight { Tag(text: "\(w)% of grade") }
+                if d.showsWeight { Tag(text: "\(d.weighting.tag) of grade") }
             }
             if d.toSubmit || d.kind == .exam { // why it ranks where it does, and where the weight came from
                 Text(d.reason(now: now)).font(.caption).foregroundStyle(Palette.text.color).fixedSize(horizontal: false, vertical: true)

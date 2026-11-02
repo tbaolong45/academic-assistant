@@ -26,7 +26,7 @@ struct WeekView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     header(start: start, items: items, everything: everything)
                     // Workload = work to hand in + exams, not talks or cancelled classes.
-                    if let c = crunch(items.filter { $0.date >= now && ($0.toSubmit || $0.kind == .exam) }) { CrunchBanner(crunch: c) }
+                    if let c = crunch(items.filter { $0.date >= now && ($0.toSubmit || $0.kind == .exam) }, now: now) { CrunchBanner(crunch: c) }
                     if !next.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             SectionLabel("Do next")
@@ -66,7 +66,7 @@ struct WeekView: View {
         let end = cal.date(byAdding: .day, value: 6, to: start)!
         let range = Text("\(start.short()) – \(end.short())")
             .font(.title3).foregroundStyle(Palette.text2.color).monospacedDigit()
-        let weight = items.reduce(0) { $0 + ($1.weight ?? 0) }
+        let weight = knownWeight(items)
         return VStack(alignment: .leading, spacing: 10) {
             Text("Deadlines").font(.largeTitle.bold()).foregroundStyle(Palette.text.color).accessibilityAddTraits(.isHeader)
             ViewThatFits(in: .horizontal) {
@@ -144,20 +144,23 @@ private func boardDays(_ items: [Deadline], weekStart: Date, now: Date) -> [Boar
 struct BoardDay: Identifiable {
     let index: Int, date: Date, items: [Deadline], isToday: Bool, isPast: Bool
     var id: Date { date }
-    var weight: Int { items.reduce(0) { $0 + ($1.weight ?? 0) } }
+    var weight: Int { knownWeight(items) }
     var heavy: Bool { weight >= 20 || items.count >= 3 }
 }
 
 /// A run of deadlines falling inside one 48-hour window.
 struct Crunch {
     let items: [Deadline] // soonest first, never empty
-    var weight: Int { items.reduce(0) { $0 + ($1.weight ?? 0) } }
+    var weight: Int { knownWeight(items) } // estimates and spares add 0, so guesses can't make a crunch; the count rule still sees them
 }
 
+/// Summed known weight (Moodle, syllabus, title), rounded: the board's "% of grade" figures (§1.4.1).
+func knownWeight(_ items: [Deadline]) -> Int { Int(items.reduce(0) { $0 + $1.weighting.known }.rounded()) }
+
 /// The worst 48-hour window holding ≥ 3 deadlines or ≥ 30% total weight (most weight, then most items, then earliest);
-/// nil if none qualifies. Windows start at each deadline.
-func crunch(_ items: [Deadline], window: TimeInterval = 48 * 3600) -> Crunch? {
-    let sorted = items.sorted { $0.date < $1.date }
+/// nil if none qualifies. Windows start at each deadline. Items past their cutoff (Moodle no longer takes them) don't count.
+func crunch(_ items: [Deadline], now: Date = .now, window: TimeInterval = 48 * 3600) -> Crunch? {
+    let sorted = items.filter { !$0.isClosed(now: now) }.sorted { $0.date < $1.date }
     return sorted.indices
         .map { i in Crunch(items: Array(sorted[i...].prefix { $0.date < sorted[i].date + window })) }
         .filter { $0.items.count >= 3 || $0.weight >= 30 }

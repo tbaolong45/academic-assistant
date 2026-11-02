@@ -85,6 +85,25 @@ Do next shows the top 3 open items by `priority`, due between now and 28 days ah
 
 - Today it holds only work to submit (`toSubmit`). The whole point of effort is that exams need lead time, so I propose adding exams to Do next (**D2**).
 - Crunch keeps today's rule (submit + exams).
+- **Overdue work (B3 review #5):** an open assignment past its due date stays in Do next only while it can still be handed in **and** we still check its status:
+  - With a cutoff: until the cutoff.
+  - Without one (Moodle accepts late work forever): for **14 days past due**.
+  - The 14 days aren't arbitrary. P6's `needsStatus` stops fetching the submission status after 14 days, so after that the app can't know the work is still open.
+  - Afterwards the item stays on the board as overdue, and the student can dismiss it (B5).
+  - This is a Do next rule, not a filter.
+
+### 1.4.1 One weight everywhere (B3 review #4)
+
+Card tags, the preview, the reason line, Do next and crunch all read `weighting`. Nothing reads the raw `Deadline.weight`, which can be a misleading `0%` when Moodle weights an item 0.
+
+| `weighting.from` | Tag | Counts toward crunch's 30% |
+|---|---|---|
+| Moodle, syllabus, title | `12%` | yes |
+| spare syllabus item | `≤ 7.5%` | no |
+| typical (type default) | `~5%` | no |
+
+- Crunch's "≥ 3 items in 48 h" rule still counts every item.
+- Only its weight rule ignores guesses. Otherwise three typical estimates could add up to a fake crunch.
 
 ### 1.5 Worked examples
 
