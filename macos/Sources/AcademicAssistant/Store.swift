@@ -92,7 +92,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
         if state == nil, let old = d.mark { // restore: also the keys of members that have left the cluster since (F1g #6)
             marks = marks.filter { $0.value != old }
         }
-        let pdf = ([d] + d.alsoIn).contains { $0.resolvedVia == .pdf } ? true : nil
+        let pdf = ([d] + d.alsoIn).contains { $0.resolvedVia == .pdf }
         let m = state.map { Mark(state: $0, until: until, itemDate: d.date, at: .now, pdf: pdf) }
         for k in keys { marks[k] = m }
         save { try BoardState.save(marks) }

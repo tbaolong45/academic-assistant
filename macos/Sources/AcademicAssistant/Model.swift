@@ -615,7 +615,8 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
     // F1e #2 / F1f #5: the days an item names. Title plus source sentence, except course pages and PDFs (their sentence
     // can hold a whole calendar, so title only) and Moodle activities (their detail is instructions).
     let days = items.map { d in
-        Moodle.namedDays(d.title + (d.source != nil && ![.coursePage, .pdf].contains(d.resolvedVia) ? " " + (d.detail ?? "") : ""))
+        Moodle.namedDays(d.title + (d.source != nil && ![.coursePage, .pdf].contains(d.resolvedVia) ? " " + (d.detail ?? "") : ""),
+                         ranges: [.coursePage, .pdf].contains(d.resolvedVia))
     }
     var refDates = items.map { d in d.ref.map { [$0: d.date] } ?? [:] } // per cluster root (F1e #3)
     // F1g: anchors (Moodle activities and assessments, syllabus placeholders included) keep the 3-day window; everything

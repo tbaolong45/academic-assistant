@@ -564,7 +564,7 @@ extension Moodle {
     private static let dateOnly = try! NSRegularExpression(pattern: #"(?i)^(?:"# + mon + #"\.?\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s+"# + mon + #")$"#)
 
     /// The weekdays and explicit dates a text names ("tue", "11/3"): "Class moved to Tuesday" ≠ "Class moved to Thursday".
-    static func namedDays(_ text: String) -> Set<String> {
+    static func namedDays(_ text: String, ranges: Bool = true) -> Set<String> {
         let ns = text as NSString, all = NSRange(location: 0, length: ns.length)
         func g(_ m: NSTextCheckingResult, _ i: Int) -> String { m.range(at: i).location == NSNotFound ? "" : ns.substring(with: m.range(at: i)) }
         func month(_ s: String) -> Int? { months.firstIndex { s.lowercased().hasPrefix($0) }.map { $0 + 1 } }
@@ -577,7 +577,12 @@ extension Moodle {
             if let d = Int(m.1), let mo = month(String(m.2)) { out.insert("\(mo)/\(d)") }
         }
         for m in monthDay.matches(in: text, range: all) { if let d = Int(g(m, 2)), let mo = month(g(m, 1)) { out.insert("\(mo)/\(d)") } }
-        if let r = range(text) { out.formUnion(["\(r.from.month)/\(r.from.day)", "\(r.to.month)/\(r.to.day)"]) } // "Dec 1-2": its 2 Dec too
+        // "Dec 1-2": its 2 Dec too, for course-page and PDF titles only (`ranges`), up to 7 days (§2.2 rule 6, F1j #3).
+        if ranges, let r = range(text), let lo = Calendar.current.date(from: DateComponents(year: 2001, month: r.from.month, day: r.from.day)),
+           var hi = Calendar.current.date(from: DateComponents(year: 2001, month: r.to.month, day: r.to.day)) {
+            if hi < lo { hi = Calendar.current.date(byAdding: .year, value: 1, to: hi) ?? hi } // "30 Dec – 2 Jan"
+            if hi.timeIntervalSince(lo) <= 7 * 86_400 { out.formUnion(["\(r.from.month)/\(r.from.day)", "\(r.to.month)/\(r.to.day)"]) }
+        }
         return out
     }
 
@@ -605,6 +610,8 @@ extension Moodle {
 
     /// A sentence saying a date moved: "postponed to", "pushed back until", "moved from 20 Oct to 1 Nov". Every verb form;
     /// "to/until/till" must be followed by a date shape, so "moved to room 3" or "to the 3rd floor" isn't a move (§2.3).
+    private static let relativeWord = try! NSRegularExpression(pattern: #"(?i)\b(?:today|tonight|this evening|tomorrow|(?:next\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday))\b"#)
+
     static let moveCue = #"(?i)\b(?:mov(?:e|es|ed|ing)|postpon(?:e|es|ed|ing)|push(?:es|ed|ing)?(?: back)?|extend(?:s|ed|ing)?|reschedul(?:e|es|ed|ing)|delay(?:s|ed|ing)?|shift(?:s|ed|ing)?|chang(?:e|es|ed|ing))\b[^.]{0,60}?\b(?:to|until|till)\s+(?:the\s+|on\s+)?(?=\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|\d{1,2}[/.]\d{1,2}\b|\d{1,2}(?::\d{2})?\s*(?:am|pm)\b|\d{1,2}:\d{2}\b|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b|today\b|tonight\b|tomorrow\b|next\s+(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\b)"#
 
     static func mentionedDates(_ text: String, posted: Date, source: CourseEvent.Source, strict: Bool = false, via: Origin? = nil) -> [CourseEvent] {
@@ -640,34 +647,46 @@ extension Moodle {
                     found.append((d, mo, g(m, 3).flatMap(Int.init).map { $0 < 100 ? 2000 + $0 : $0 }, m.range.location))
                 }
             }
-            // Relative words are resolved against the post date: today/tonight, tomorrow, a weekday ("Tuesday" = the next one
-            // after the post; "next Tuesday" = the one in the following week).
-            var relative: Date?, word = ""
-            if found.isEmpty && !strict { // relative words only make sense in a dated post, not in reused slides
-                let low = sentence.lowercased(), postedDay = cal.startOfDay(for: posted)
-                let days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
-                if low.range(of: #"\b(today|tonight|this evening)\b"#, options: .regularExpression) != nil { relative = postedDay; word = #"\b(today|tonight|this evening)\b"# }
-                else if low.range(of: #"\btomorrow\b"#, options: .regularExpression) != nil { relative = cal.date(byAdding: .day, value: 1, to: postedDay); word = #"\btomorrow\b"# }
-                else if let m = low.firstMatch(of: /\b(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/),
-                        let wd = days.firstIndex(of: String(m.2)) {
-                    var d = cal.nextDate(after: postedDay, matching: DateComponents(weekday: wd + 1), matchingPolicy: .nextTime) ?? postedDay
-                    var monWeek = cal; monWeek.firstWeekday = 2
-                    if m.1 != nil, monWeek.isDate(d, equalTo: postedDay, toGranularity: .weekOfYear) { d = cal.date(byAdding: .day, value: 7, to: d) ?? d }
-                    relative = d
-                    word = #"\b(next\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b"#
-                }
-                if let r = relative {
-                    let c = cal.dateComponents([.year, .month, .day], from: r)
-                    let at = ns.range(of: "(?i)" + word, options: .regularExpression).location // the word used, for the cue check
-                    found.append((c.day!, c.month!, c.year!, at))
-                }
-            }
-            guard !found.isEmpty else { continue }
             // "Moved from 20 Oct to 1 Nov" (§2.3): the dates after the cue are the new ones; those before it are the old ones.
             let cue = ns.range(of: Self.moveCue, options: .regularExpression)
             var cueEnd = cue.location == NSNotFound ? nil : cue.location + cue.length
-            // Second net (§2.3): with no date at or after the cue, ignore it, so a cue can never make a date vanish.
-            if let end = cueEnd, !found.contains(where: { (1...31).contains($0.day) && $0.at >= end }) { cueEnd = nil }
+            // Relative words are resolved against the post date: today/tonight, tomorrow, a weekday ("Tuesday" = the next one
+            // after the post; "next Tuesday" = the one in the following week). Each is read with its position (F1j #2), so
+            // after a cue the new day wins ("move today's office hours to tomorrow", "Quiz on 20 Oct moved to Thursday").
+            if !strict { // relative words only make sense in a dated post, not in reused slides
+                let postedDay = cal.startOfDay(for: posted)
+                let days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+                var monWeek = cal; monWeek.firstWeekday = 2
+                let relatives: [(found: (day: Int, month: Int, year: Int?, at: Int), rank: Int)] = Self.relativeWord.matches(in: sentence, range: all).compactMap { m in
+                    let w = ns.substring(with: m.range).lowercased()
+                    var d: Date?, rank = 2
+                    if ["today", "tonight", "this evening"].contains(w) { d = postedDay; rank = 0 }
+                    else if w == "tomorrow" { d = cal.date(byAdding: .day, value: 1, to: postedDay); rank = 1 }
+                    else if let wd = days.firstIndex(where: { w.hasSuffix($0) }) {
+                        var x = cal.nextDate(after: postedDay, matching: DateComponents(weekday: wd + 1), matchingPolicy: .nextTime) ?? postedDay
+                        if w.hasPrefix("next"), monWeek.isDate(x, equalTo: postedDay, toGranularity: .weekOfYear) { x = cal.date(byAdding: .day, value: 7, to: x) ?? x }
+                        d = x
+                    }
+                    guard let d else { return nil }
+                    let c = cal.dateComponents([.year, .month, .day], from: d)
+                    return ((c.day!, c.month!, c.year!, m.range.location), rank)
+                }
+                // After a cue with no explicit date of its own, the relative word is the new day. ("to Friday, 9 October":
+                // the weekday only names the date's day, so it isn't a second date.)
+                if let end = cueEnd, !found.contains(where: { $0.at >= end }), case let after = relatives.filter({ $0.found.at >= end }), !after.isEmpty {
+                    found += after.map(\.found)
+                } else if found.isEmpty, let pick = relatives.min(by: { ($0.rank, $0.found.at) < ($1.rank, $1.found.at) }) {
+                    found.append(pick.found) // no cue: today before tomorrow before a weekday, as before
+                }
+            }
+            guard !found.isEmpty else { continue }
+            // Second net (§2.3): with no real date at or after the cue, ignore it, so a cue can never make a date vanish.
+            func real(_ f: (day: Int, month: Int, year: Int?, at: Int)) -> Bool {
+                guard (1...31).contains(f.day), let d = cal.date(from: DateComponents(year: f.year ?? cal.component(.year, from: posted), month: f.month, day: f.day))
+                else { return false }
+                return cal.component(.day, from: d) == f.day // "31 April" doesn't count
+            }
+            if let end = cueEnd, !found.contains(where: { real($0) && $0.at >= end }) { cueEnd = nil }
             var hour = 23, minute = 59 // a date with no time is a "by the end of that day" deadline
             func hasDate(_ s: String) -> Bool {
                 let r = NSRange(s.startIndex..., in: s)

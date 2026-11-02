@@ -1336,6 +1336,75 @@ func runSelfCheck() -> Never {
     check(generalMerged.count == 1 && generalMerged[0].id == "general" && generalMerged[0].events?.map(\.title) == ["Holiday"],
           "sync: a General course made of course-page dates survives a fast sync that doesn't see it")
 
+    // MARK: - F1j review fixes
+
+    let oldMark = Mark(state: .done, itemDate: b3Now.addingTimeInterval(-40 * 86_400), at: b3Now)
+    if let oldMarkData = try? JSONEncoder().encode([BoardState.key("old-key"): oldMark]),
+       let decodedMarks = try? JSONDecoder().decode(Marks.self, from: oldMarkData) {
+        check(!String(decoding: oldMarkData, as: UTF8.self).contains("pdf")
+              && decodedMarks.values.first?.pdf == nil
+              && pruneMarks(decodedMarks, live: [], now: b3Now, keepPDF: true).count == 1
+              && pruneMarks(decodedMarks, live: [], now: b3Now).isEmpty,
+              "marks: a board-state file without the pdf flag still decodes, and such a mark survives an unreadable PDF")
+    } else { check(false, "marks: an old board-state JSON decodes") }
+    let f1jPosted = b3At(2026, 10, 5) // a Monday
+    let f1jTodayToTomorrow = Moodle.mentionedDates("move today's office hours to tomorrow", posted: f1jPosted,
+                                                   source: .announcement, via: .news)
+    check(f1jTodayToTomorrow.count == 1 && b4Is(f1jTodayToTomorrow[0].date, 2026, 10, 6) && f1jTodayToTomorrow[0].moved == true,
+          "cluster: 'move today's … to tomorrow' gives tomorrow, moved (got \(f1jTodayToTomorrow.map { "\($0.date) moved=\($0.moved ?? false)" }))")
+    let f1jWeekdayMove = Moodle.mentionedDates("Quiz Tuesday moved to Thursday", posted: f1jPosted, source: .announcement, via: .news)
+    check(f1jWeekdayMove.count == 1 && b4Is(f1jWeekdayMove[0].date, 2026, 10, 8) && f1jWeekdayMove[0].moved == true,
+          "cluster: 'Quiz Tuesday moved to Thursday' gives Thursday, moved (got \(f1jWeekdayMove.map { "\($0.date) moved=\($0.moved ?? false)" }))")
+    let f1jAbsoluteMove = Moodle.mentionedDates("Quiz on 20 Oct moved to Thursday", posted: f1jPosted, source: .announcement, via: .news)
+    check(f1jAbsoluteMove.count == 1 && b4Is(f1jAbsoluteMove[0].date, 2026, 10, 8) && f1jAbsoluteMove[0].moved == true,
+          "cluster: 'Quiz on 20 Oct moved to Thursday' gives that Thursday, moved (got \(f1jAbsoluteMove.map { "\($0.date) moved=\($0.moved ?? false)" }))")
+    check(Moodle.namedDays("moved from 1 Oct to 15 Dec", ranges: false) == ["10/1", "12/15"]
+          && Moodle.namedDays("Dec 1-2", ranges: false) == ["12/1"],
+          "dates: without ranges, only the explicit dates count (a news post adds no range days)")
+
+    final class ParallelLoads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current = 0
+        private(set) var peak = 0
+        func enter() { lock.lock(); current += 1; peak = max(peak, current); lock.unlock() }
+        func leave() { lock.lock(); current -= 1; lock.unlock() }
+    }
+    let parallelLoads = ParallelLoads()
+    let parallelDone = DispatchSemaphore(value: 0)
+    let parallelKeys = [PDFCache.Key(path: "/tmp/aa-fixture-p1.pdf", size: 5, modified: 400),
+                        PDFCache.Key(path: "/tmp/aa-fixture-p2.pdf", size: 5, modified: 400)]
+    Task {
+        await withTaskGroup(of: Void.self) { group in
+            for key in parallelKeys {
+                group.addTask {
+                    _ = PDFCache.entry(key) {
+                        parallelLoads.enter()
+                        Thread.sleep(forTimeInterval: 0.25)
+                        parallelLoads.leave()
+                        return "Quiz on 5 Nov"
+                    }
+                }
+            }
+        }
+        parallelDone.signal()
+    }
+    _ = parallelDone.wait(timeout: .now() + 10)
+    check(parallelLoads.peak == 2, "b7: two different PDFs parse at the same time (peak \(parallelLoads.peak))")
+
+    let stampDir = FileManager.default.temporaryDirectory.appendingPathComponent("aa-stamp-\(UUID().uuidString)", isDirectory: true)
+    do {
+        defer { try? FileManager.default.removeItem(at: stampDir) }
+        try FileManager.default.createDirectory(at: stampDir, withIntermediateDirectories: true)
+        let stampURL = stampDir.appendingPathComponent("doc.pdf")
+        try Data(repeating: 0x42, count: 64).write(to: stampURL)
+        let unknownTime = MaterialFile(name: "doc.pdf", url: "https://x/doc.pdf", size: 64, modified: 0)
+        let unstampedSaved = MaterialStore.isSaved(stampURL, unknownTime)
+        MaterialStore.stamp(stampURL)
+        let stampedSaved = MaterialStore.isSaved(stampURL, unknownTime)
+        check(!unstampedSaved && stampedSaved && MaterialStore.isStamped(stampURL),
+              "b7: with no Moodle timestamp an unstamped file is re-downloaded once, then kept (got \(unstampedSaved)/\(stampedSaved))")
+    } catch { check(false, "b7: stamp fixtures run (\(error))") }
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.

@@ -20,10 +20,18 @@ enum MaterialStore {
     /// On disk and current (F1i #1): not empty, the size Moodle reports, and modified no earlier than Moodle's
     /// `timemodified`. A download is stamped with that time; a file saved before F1i carries its (later) download time,
     /// so it still counts, while a same-size update on Moodle is fetched again.
+    /// With no `timemodified` from Moodle (F1j #5), only a copy this app downloaded counts: a file from before that is
+    /// fetched once more and stamped, so a same-size change made before then is caught once. Limits: after that, a
+    /// same-size change with no timestamp isn't seen; nor is a replacement Moodle back-dates to before our copy.
     static func isSaved(_ url: URL, _ file: MaterialFile) -> Bool {
         guard let local = attributes(url), local.size > 0 else { return false }
-        return (file.size == 0 || local.size == file.size) && (file.modified <= 0 || local.modified >= file.modified)
+        return (file.size == 0 || local.size == file.size) && (file.modified <= 0 ? isStamped(url) : local.modified >= file.modified)
     }
+
+    /// An extended attribute on each file this app downloads (F1j #5).
+    private static let stampName = "com.tbaolong45.academicassistant.downloaded"
+    static func isStamped(_ url: URL) -> Bool { getxattr(url.path(percentEncoded: false), stampName, nil, 0, 0, 0) >= 0 }
+    static func stamp(_ url: URL) { _ = setxattr(url.path(percentEncoded: false), stampName, "1", 1, 0, 0) }
 
     /// The local file's size and modification time (whole seconds), or nil when it isn't there.
     static func attributes(_ url: URL) -> (size: Int, modified: Int)? {
@@ -67,6 +75,7 @@ enum MaterialStore {
             try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(file.modified))],
                                                   ofItemAtPath: to.path(percentEncoded: false))
         }
+        stamp(to)
     }
 
     /// The cache key of the file on disk (F1i #2), so whatever is there is what gets parsed.
@@ -146,21 +155,27 @@ enum PDFCache {
     /// The file's Moodle modified time, or now when Moodle gave none.
     static func posted(_ modified: Int) -> Date { modified > 0 ? Date(timeIntervalSince1970: Double(modified)) : .now }
     private static let entries = Mutex<[String: (key: Key, entry: Entry)]>([:]) // by path: a changed file replaces its entry
-    // ponytail: one lock for every parse, so a second caller waits for the first instead of parsing the same PDF again
-    // (F1i #4); parses of different files queue too. Per-key locks if the preview's wait ever shows.
-    private static let parsing = Mutex(())
+    // One lock per file (F1j #4): a second caller of the same PDF waits for the first parse instead of repeating it,
+    // while different files parse side by side. One small lock per PDF path, kept for the app's run.
+    private static let parsing = Mutex<[String: NSLock]>([:])
 
     /// The cached entry for `key`, else `load()` (the file read) parsed and stored; nil when the file has no text.
     /// `posted` dates the text's relative years (Moodle's modified time); by default the key's.
     static func entry(_ key: Key, posted when: Date? = nil, load: () -> String?) -> Entry? {
         func hit() -> Entry? { entries.withLock { $0[key.path] }.flatMap { $0.key == key ? $0.entry : nil } }
         if let e = hit() { return e }
-        return parsing.withLock { _ in
-            if let e = hit() { return e } // parsed by the caller we waited for
-            guard let text = load() else { return nil }
-            let entry = Entry(text: text, found: Moodle.mentionedDates(text, posted: when ?? posted(key.modified), source: .document, strict: true))
-            entries.withLock { $0[key.path] = (key, entry) }
-            return entry
+        let lock = parsing.withLock { locks in
+            if let l = locks[key.path] { return l }
+            let l = NSLock()
+            locks[key.path] = l
+            return l
         }
+        lock.lock()
+        defer { lock.unlock() }
+        if let e = hit() { return e } // parsed by the caller we waited for
+        guard let text = load() else { return nil }
+        let entry = Entry(text: text, found: Moodle.mentionedDates(text, posted: when ?? posted(key.modified), source: .document, strict: true))
+        entries.withLock { $0[key.path] = (key, entry) }
+        return entry
     }
 }
