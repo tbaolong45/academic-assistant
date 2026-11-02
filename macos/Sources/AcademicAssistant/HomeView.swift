@@ -69,13 +69,16 @@ struct HomeView: View {
     }
 
     private var syncStatus: some View {
-        let (color, text): (Color, String) =
-            !store.isConnected ? (Palette.text3.color, "Sample data")
-            : store.syncing ? (Palette.accent.color, "Syncing…")
-            : store.syncError != nil ? (Palette.critical.color, "Sync failed")
-            : (Palette.good.color, store.lastSynced.map { "Synced \($0.formatted(date: .omitted, time: .shortened))" } ?? "Not synced yet")
+        // Status colour always with its icon (U4 review #1); a spinner only while a sync runs.
+        let (color, icon, text): (Color, String, String) =
+            !store.isConnected ? (Palette.text3.color, "circle.dashed", "Sample data")
+            : store.syncing ? (Palette.accent.color, "", "Syncing…")
+            : store.syncError != nil ? (Palette.critical.color, "exclamationmark.triangle.fill", "Sync failed")
+            : store.lastSynced.map { (Palette.good.color, "checkmark.circle.fill", "Synced \($0.formatted(date: .omitted, time: .shortened))") }
+                ?? (Palette.text3.color, "circle.dashed", "Not synced yet")
         return HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 8, height: 8).accessibilityHidden(true)
+            if icon.isEmpty { ProgressView().controlSize(.mini) }
+            else { Image(systemName: icon).foregroundStyle(color).accessibilityHidden(true) }
             Text(text).font(.callout).foregroundStyle(Palette.text2.color)
         }
         .accessibilityElement(children: .combine)

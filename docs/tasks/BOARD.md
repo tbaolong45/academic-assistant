@@ -29,7 +29,8 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | F1e | Wrong merges from B4 review (2 Medium) | Builder + Test writer | Model.swift (see docs/tasks/F1e-review-fixes.md) | done; review pending |
 | P9 | Skip AI titles for members hidden behind a Moodle-activity winner | Builder + Test writer | Summarizer.swift, Model.swift | done (user-approved); review pending |
 | B6 | Filters + Show hidden (undo marks), plus F1f (B5 review fixes) | Builder + Test writer | WeekView, WeekBoardParts, Store, BoardState | done; review pending |
-| U5 | Course page + sheets restyle (+ U4 review #1/#2) | Builder | CourseView, ScoreChart, AssessmentSheet, HomeView, WeekBoardParts | in progress |
+| F1g | Merge rule by source (anchors 3 days, others same day/12 h) + cluster invariant; P9 board-only titles | Builder + Test writer | Model, Summarizer (see docs/tasks/F1g-merge-rule.md) | in progress; cluster gate before commit |
+| U5 | Course page + sheets restyle (+ U4 review #1/#2) | Builder | CourseView, CalendarView, AssessmentSheet, ConnectView, WhatIfPanel, ScoreChart, HomeView, WeekBoardParts | done; review pending; screens wait for cert |
 | B5 | Marks (done/dismiss/snooze) keyed by memberKey | Builder + Test writer | BoardState (new), Model, Store, WeekBoardParts | done; checks + review pending |
 | U1c (build) | Dark retune | Builder | Theme.swift | done; palette checks (a)-(e) pending; screenshots wait for cert |
 | U4 | Overview + Deadlines restyle, endless-animation removal | Builder | HomeView, WeekView, WeekBoardParts | done (code); screenshots + idle CPU wait for signing cert |

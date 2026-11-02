@@ -321,8 +321,8 @@ struct CrunchBanner: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 12)) // inside the card's surface, so it shows (U4 review #2)
         .card()
-        .background(amber.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
         .modifier(WarningEdge(active: true, radius: 12))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Warning: crunch, \(sameDay ? weekday(first, .wide) : "\(weekday(first, .wide)) to \(weekday(last, .wide))"), "

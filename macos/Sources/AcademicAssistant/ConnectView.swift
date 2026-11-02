@@ -1,7 +1,23 @@
 import AppKit
 import SwiftUI
 
-private let alarm = Color(hex: "ff6b6b") // sync errors only
+/// An error line: the critical colour with its icon, never colour alone.
+private struct ErrorLine: View {
+    let text: String
+    var body: some View {
+        Label { Text(text).fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "exclamationmark.triangle.fill") }
+            .font(.callout).foregroundStyle(Palette.critical.color)
+    }
+}
+
+/// "Key saved in Keychain" with a check, plus the step's latest note.
+private func saved(_ text: String, note: String?) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.good.color).accessibilityHidden(true)
+        Text(text).foregroundStyle(Palette.text.color)
+        if let note { Text("· \(note)").foregroundStyle(Palette.text2.color).lineLimit(2) }
+    }
+}
 
 /// Connect / manage the Moodle link. The key is typed into a SecureField, sent once to test it, then lives in the Keychain.
 struct ConnectView: View {
@@ -29,7 +45,7 @@ struct ConnectView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
-                TypewriterTitle(text: "moodle link")
+                Text("Accounts").font(.title.bold()).foregroundStyle(Palette.text.color).accessibilityAddTraits(.isHeader)
                 Spacer()
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
             }
@@ -38,39 +54,39 @@ struct ConnectView: View {
         }
         .padding(24)
         .frame(width: 520)
-        .background(Tech.panel)
+        .background(Palette.surface.color)
     }
 
     @ViewBuilder private var form: some View {
-        SectionLabel("site")
+        SectionLabel("Moodle site")
         HStack(spacing: 8) {
-            TextField("site", text: $site, prompt: Text("https://…").foregroundStyle(Tech.text3))
-                .textFieldStyle(.plain).padding(8).techPanel(radius: 6)
+            TextField("site", text: $site, prompt: Text("https://…").foregroundStyle(Palette.text3.color))
+                .textFieldStyle(.roundedBorder)
             Button("Open Security keys page") { openKeysPage() }
         }
 
-        SectionLabel("sign in")
+        SectionLabel("Sign in")
         Text("Opens a private sign-in window. Log in with your university account; the app receives its key automatically.")
-            .font(.callout).foregroundStyle(Tech.text2)
+            .font(.callout).foregroundStyle(Palette.text2.color)
         HStack {
             Button(busy ? "Waiting for sign-in…" : "Sign in with university SSO", action: signInSSO)
                 .keyboardShortcut(.defaultAction).disabled(busy)
             if busy { ProgressView().controlSize(.small) }
         }
 
-        SectionLabel("or paste a key")
+        SectionLabel("Or paste a key")
         VStack(alignment: .leading, spacing: 6) {
             step(1, "Open the Security keys page (button above)")
             step(2, "Copy the key in the “Moodle mobile web service” row")
             step(3, "Paste it here and press Connect")
         }
 
-        SectionLabel("key")
-        SecureField("key", text: $key, prompt: Text("paste key").foregroundStyle(Tech.text3))
-            .textFieldStyle(.plain).padding(8).techPanel(active: !key.isEmpty, radius: 6)
+        SectionLabel("Key")
+        SecureField("key", text: $key, prompt: Text("paste key").foregroundStyle(Palette.text3.color))
+            .textFieldStyle(.roundedBorder)
             .onSubmit(connect)
 
-        if let message { Text(message).font(.caption).foregroundStyle(alarm) }
+        if let message { ErrorLine(text: message) }
 
         HStack {
             Spacer()
@@ -81,29 +97,29 @@ struct ConnectView: View {
     }
 
     @ViewBuilder private var connected: some View {
-        SectionLabel("status")
+        SectionLabel("Moodle")
         VStack(alignment: .leading, spacing: 6) {
-            Text("● CONNECTED · \(store.siteName ?? site)").foregroundStyle(Tech.neon)
+            saved("Connected to \(store.siteName ?? site)", note: nil)
             if store.syncing && store.lastSynced == nil {
-                Text("first sync running…").foregroundStyle(Tech.text2)
+                Text("First sync running…").foregroundStyle(Palette.text2.color)
             } else if store.lastSynced != nil {
                 Text("\(store.subjects.count) courses found: \(store.subjects.map(\.code).joined(separator: ", "))")
-                    .foregroundStyle(Tech.text)
-                Text(store.syncing ? "syncing…" : "synced \(store.lastSynced.map(ago) ?? "")").foregroundStyle(Tech.text2)
+                    .foregroundStyle(Palette.text.color)
+                Text(store.syncing ? "Syncing…" : "Synced \(store.lastSynced.map(ago) ?? "")").foregroundStyle(Palette.text2.color)
             }
-            if let e = store.syncError { Text(e).foregroundStyle(alarm) }
+            if let e = store.syncError { ErrorLine(text: e) }
         }
         .font(.callout)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .techPanel()
+        .card()
 
-        if let note = store.cacheNote { Text("· \(note)").font(.caption).foregroundStyle(Tech.text2) }
+        if let note = store.cacheNote { Text("· \(note)").font(.caption).foregroundStyle(Palette.text2.color) }
         if !store.warnings.isEmpty {
-            SectionLabel("skipped")
+            SectionLabel("Skipped")
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(store.warnings, id: \.self) { Text("· \($0)").font(.caption).foregroundStyle(Tech.text2) }
+                    ForEach(store.warnings, id: \.self) { Text("· \($0)").font(.caption).foregroundStyle(Palette.text2.color) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -119,28 +135,27 @@ struct ConnectView: View {
 
     private func step(_ n: Int, _ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("\(n).").foregroundStyle(Tech.neon)
-            Text(text).foregroundStyle(Tech.text)
+            Text("\(n).").foregroundStyle(Palette.accentInk.color).monospacedDigit()
+            Text(text).foregroundStyle(Palette.text.color)
         }
         .font(.callout)
     }
 
     /// Jev (TypeSafe "System One") sorts announcements and dated items into deadline / exam / class change / event / grades / info.
     @ViewBuilder private var classifier: some View {
-        SectionLabel("ai classifier · jev")
+        SectionLabel("AI classifier (Jev)")
         if store.hasJevKey {
             HStack {
-                Text("● KEY SAVED IN KEYCHAIN").foregroundStyle(Tech.neon)
-                if let note = store.classifierNote { Text("· \(note)").foregroundStyle(Tech.text2) }
+                saved("Key saved in Keychain", note: store.classifierNote)
                 Spacer()
                 Button("Remove key") { store.removeJevKey() }
             }
             .font(.callout)
         } else {
             Text("Paste your TypeSafe API key. Announcement and course-document text is sent to api.typesafe.ai to be classified; grades and files are not.")
-                .font(.callout).foregroundStyle(Tech.text2).fixedSize(horizontal: false, vertical: true)
+                .font(.callout).foregroundStyle(Palette.text2.color).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                SecureField("TypeSafe API key", text: $jevKey).textFieldStyle(.plain).padding(8).techPanel(radius: 6)
+                SecureField("TypeSafe API key", text: $jevKey).textFieldStyle(.roundedBorder)
                 Button(jevBusy ? "Checking…" : "Save key") {
                     jevBusy = true
                     jevError = nil
@@ -152,24 +167,24 @@ struct ConnectView: View {
                 }
                 .disabled(jevBusy || jevKey.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            if let e = jevError { Text(e).font(.callout).foregroundStyle(alarm) }
+            if let e = jevError { ErrorLine(text: e) }
         }
 
         // Outlook Calendar: MBZUAI blocks app registrations for students, so the published ICS link is the way in.
-        SectionLabel("outlook calendar")
+        SectionLabel("Outlook calendar")
         if store.hasOutlookLink {
             HStack {
-                Text("● LINK SAVED IN KEYCHAIN").foregroundStyle(Tech.neon)
-                if let note = store.outlookNote { Text("· \(note)").foregroundStyle(alarm).lineLimit(2) }
+                saved("Link saved in Keychain", note: nil)
                 Spacer()
                 Button("Remove link") { store.removeOutlookLink() }
             }
             .font(.callout)
+            if let note = store.outlookNote { ErrorLine(text: note) } // only set when the calendar couldn't be read
         } else {
             Text("In Outlook: Settings ▸ Calendar ▸ Shared calendars ▸ Publish a calendar, then paste the ICS link. It works like a password and is kept in the Keychain.")
-                .font(.callout).foregroundStyle(Tech.text2).fixedSize(horizontal: false, vertical: true)
+                .font(.callout).foregroundStyle(Palette.text2.color).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                SecureField("ICS link (…/calendar.ics)", text: $icsLink).textFieldStyle(.plain).padding(8).techPanel(radius: 6)
+                SecureField("ICS link (…/calendar.ics)", text: $icsLink).textFieldStyle(.roundedBorder)
                 Button(icsBusy ? "Checking…" : "Save link") {
                     icsBusy = true
                     icsError = nil
@@ -181,25 +196,24 @@ struct ConnectView: View {
                 }
                 .disabled(icsBusy || icsLink.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            if let e = icsError { Text(e).font(.callout).foregroundStyle(alarm) }
+            if let e = icsError { ErrorLine(text: e) }
         }
 
         // School mail: an Outlook forwarding rule sends it to Gmail; the app reads only mail addressed to @mbzuai.ac.ae.
-        SectionLabel("school mail · via gmail")
+        SectionLabel("School mail via Gmail")
         if store.hasMail {
             HStack {
-                Text("● APP PASSWORD SAVED IN KEYCHAIN").foregroundStyle(Tech.neon)
-                if let note = store.mailNote { Text("· \(note)").foregroundStyle(Tech.text2).lineLimit(2) }
+                saved("App password saved in Keychain", note: store.mailNote)
                 Spacer()
                 Button("Remove") { store.removeMail() }
             }
             .font(.callout)
         } else {
             Text("Outlook forwards school mail to Gmail. Create a Gmail app password (myaccount.google.com/apppasswords) and paste it here; only mail sent to @mbzuai.ac.ae is read.")
-                .font(.callout).foregroundStyle(Tech.text2).fixedSize(horizontal: false, vertical: true)
+                .font(.callout).foregroundStyle(Palette.text2.color).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                TextField("Gmail address", text: $gmail).textFieldStyle(.plain).padding(8).techPanel(radius: 6).frame(width: 200)
-                SecureField("app password (16 letters)", text: $appPassword).textFieldStyle(.plain).padding(8).techPanel(radius: 6)
+                TextField("Gmail address", text: $gmail).textFieldStyle(.roundedBorder).frame(width: 200)
+                SecureField("app password (16 letters)", text: $appPassword).textFieldStyle(.roundedBorder)
                 Button(mailBusy ? "Checking…" : "Save") {
                     mailBusy = true
                     mailError = nil
@@ -211,24 +225,23 @@ struct ConnectView: View {
                 }
                 .disabled(mailBusy || appPassword.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            if let e = mailError { Text(e).font(.callout).foregroundStyle(alarm) }
+            if let e = mailError { ErrorLine(text: e) }
         }
 
         // Titles: Jev picks the important sentences, DeepSeek condenses them into one title, Jev checks it.
-        SectionLabel("ai titles · deepseek")
+        SectionLabel("AI titles (DeepSeek)")
         if store.hasDeepSeekKey {
             HStack {
-                Text("● KEY SAVED IN KEYCHAIN").foregroundStyle(Tech.neon)
-                if let note = store.summaryNote { Text("· \(note)").foregroundStyle(Tech.text2).lineLimit(2) }
+                saved("Key saved in Keychain", note: store.summaryNote)
                 Spacer()
                 Button("Remove key") { store.removeDeepSeekKey() }
             }
             .font(.callout)
         } else {
             Text("Paste your DeepSeek API key. Only the sentences Jev marks as important are sent to api.deepseek.com; it needs the Jev key too.")
-                .font(.callout).foregroundStyle(Tech.text2).fixedSize(horizontal: false, vertical: true)
+                .font(.callout).foregroundStyle(Palette.text2.color).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                SecureField("DeepSeek API key", text: $dsKey).textFieldStyle(.plain).padding(8).techPanel(radius: 6)
+                SecureField("DeepSeek API key", text: $dsKey).textFieldStyle(.roundedBorder)
                 Button(dsBusy ? "Checking…" : "Save key") {
                     dsBusy = true
                     dsError = nil
@@ -240,7 +253,7 @@ struct ConnectView: View {
                 }
                 .disabled(dsBusy || dsKey.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            if let e = dsError { Text(e).font(.callout).foregroundStyle(alarm) }
+            if let e = dsError { ErrorLine(text: e) }
         }
     }
 
@@ -288,31 +301,32 @@ struct SyncFooter: View {
     let open: () -> Void
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let color = store.syncError != nil ? alarm : store.lastSynced != nil ? Tech.neon : Tech.text3
+        TimelineView(.periodic(from: .now, by: 30)) { context in // "2m ago": a 30 s tick is enough
             HStack(spacing: 8) {
-                Circle().fill(color).frame(width: 7, height: 7).shadow(color: color, radius: 4)
-                    .pulse(store.syncing, color: color)
-                    .id(store.syncing) // restart the pulse each time a sync starts
+                // A spinner only while a sync runs (work in progress); otherwise a static icon with the text.
+                if store.syncing { ProgressView().controlSize(.mini) }
+                else if store.syncError != nil { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.critical.color) }
+                else if store.lastSynced != nil { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.good.color) }
+                else { Image(systemName: "circle.dashed").foregroundStyle(Palette.text3.color) }
                 Text(label(context.date))
-                    .font(.caption2.weight(.semibold)).tracking(1.2)
-                    .foregroundStyle(store.syncError != nil ? alarm : Tech.text2)
+                    .font(.caption)
+                    .foregroundStyle(store.syncError != nil ? Palette.critical.color : Palette.text2.color)
                     .lineLimit(2)
                     .help(store.syncError ?? "")
                 Spacer(minLength: 4)
                 Button(store.isConnected ? "Sync" : "Connect…", action: open).controlSize(.small)
             }
             .padding(10)
-            .techPanel(radius: 8)
+            .card(radius: 8)
             .padding(8)
         }
     }
 
     private func label(_ now: Date) -> String {
-        if store.syncing { return "SYNCING…" }
-        if let e = store.syncError { return "SYNC FAILED · \(e)" }
-        if let d = store.lastSynced { return "LIVE · synced \(ago(d, now: now))" }
-        return store.isConnected ? "CONNECTED" : "SAMPLE DATA"
+        if store.syncing { return "Syncing…" }
+        if let e = store.syncError { return "Sync failed · \(e)" }
+        if let d = store.lastSynced { return "Synced \(ago(d, now: now))" }
+        return store.isConnected ? "Connected" : "Sample data"
     }
 }
 

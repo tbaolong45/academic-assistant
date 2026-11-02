@@ -20,8 +20,8 @@ struct CalendarView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     header(start: start, end: end, count: items.count)
                     if store.calendarItems.isEmpty {
-                        Text("No Outlook calendar yet: click Sync (bottom left) and add your calendar's ICS link under OUTLOOK CALENDAR.")
-                            .font(.callout).foregroundStyle(Tech.text3)
+                        Text("No Outlook calendar yet: click Sync (bottom left) and add your calendar's ICS link under Outlook calendar.")
+                            .font(.callout).foregroundStyle(Palette.text3.color)
                     } else if g.size.width >= 900 {
                         HStack(alignment: .top, spacing: 8) {
                             ForEach(days, id: \.self) { d in column(d, items: items.filter { cal.isDate($0.start, inSameDayAs: d) }) }
@@ -43,53 +43,51 @@ struct CalendarView: View {
     private func header(start: Date, end: Date, count: Int) -> some View {
         let last = cal.date(byAdding: .day, value: -1, to: end)!
         return VStack(alignment: .leading, spacing: 10) {
-            TypewriterTitle(text: "> calendar")
+            Text("Calendar").font(.largeTitle.bold()).foregroundStyle(Palette.text.color).accessibilityAddTraits(.isHeader)
             HStack {
-                Text("\(start.short().uppercased()) – \(last.short().uppercased())").font(.callout.weight(.semibold)).foregroundStyle(Tech.text2)
+                Text("\(start.short()) – \(last.short())").font(.title3).foregroundStyle(Palette.text2.color).monospacedDigit()
                 Spacer(minLength: 16)
                 HStack(spacing: 8) {
-                    BoardButton(glow: Tech.neon) { offset -= 1 } label: { label(Image(systemName: "chevron.left")) }
-                        .accessibilityLabel("Previous week")
-                    BoardButton(glow: Tech.neon) { offset = 0 } label: { label(Text("This week")) }.opacity(offset == 0 ? 0.5 : 1)
-                    BoardButton(glow: Tech.neon) { offset += 1 } label: { label(Image(systemName: "chevron.right")) }
-                        .accessibilityLabel("Next week")
+                    Button { offset -= 1 } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous week")
+                    Button("This week") { offset = 0 }.disabled(offset == 0)
+                    Button { offset += 1 } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Next week")
                 }
+                .buttonStyle(.bordered)
             }
-            Text("\(count) item\(count == 1 ? "" : "s") from Outlook").font(.caption).foregroundStyle(Tech.text)
+            Text("\(count) item\(count == 1 ? "" : "s") from Outlook").font(.callout).foregroundStyle(Palette.text2.color)
         }
-    }
-
-    private func label(_ content: some View) -> some View {
-        content.font(.caption.weight(.semibold)).foregroundStyle(Tech.text).padding(.horizontal, 10).padding(.vertical, 6)
     }
 
     private func column(_ day: Date, items: [OutlookCalendar.Occurrence]) -> some View {
         let today = cal.isDateInToday(day)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text(day.formatted(.dateTime.weekday(.abbreviated)).uppercased()).font(.caption.weight(.bold)).foregroundStyle(today ? Tech.neon : Tech.text)
-                Text(day.formatted(.dateTime.day())).font(.caption).foregroundStyle(Tech.text2)
-                if today { Text("TODAY").font(.system(size: 9, weight: .bold)).tracking(0.8).foregroundStyle(Tech.neon) }
+                Text(day.formatted(.dateTime.weekday(.abbreviated))).font(.caption.weight(.semibold)).foregroundStyle(Palette.text.color)
+                Text(day.formatted(.dateTime.day())).font(.caption).foregroundStyle(Palette.text2.color)
+                if today {
+                    Text("Today").font(.caption2.weight(.semibold)).foregroundStyle(Palette.onAccent.color)
+                        .padding(.horizontal, 7).padding(.vertical, 1).background(Palette.accent.color, in: Capsule())
+                }
             }
-            if items.isEmpty { Text("— free —").font(.caption2).foregroundStyle(Tech.text3).padding(.vertical, 6) }
+            if items.isEmpty { Text("Free").font(.caption2).foregroundStyle(Palette.text3.color).padding(.vertical, 6) }
             ForEach(items) { card($0) }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(8)
-        .techPanel(radius: 8)
-        .overlay { if today { RoundedRectangle(cornerRadius: 8).strokeBorder(Tech.neon.opacity(0.6)) } }
+        .background { if today { RoundedRectangle(cornerRadius: 8).fill(Palette.accentSoft.color) } } // today: a soft blue column
+        .card(radius: 8)
     }
 
     private func card(_ o: OutlookCalendar.Occurrence) -> some View {
         let course = Moodle.route(o.title, store.subjects).map { store.subjects[$0] }
-        let accent = course?.hue.palette.accent ?? Tech.text3
+        let accent = course?.hue.palette.accent ?? Palette.text3.color
         let time = "\(hm(o.start))–\(hm(o.end))"
         return HStack(alignment: .top, spacing: 6) {
             accent.frame(width: 3).clipShape(Capsule())
             VStack(alignment: .leading, spacing: 2) {
-                Text(time).font(.caption2).foregroundStyle(Tech.text2).monospacedDigit()
-                Text(o.title).font(.caption.weight(.semibold)).foregroundStyle(Tech.text).lineLimit(3).fixedSize(horizontal: false, vertical: true)
-                if !o.location.isEmpty { Text(o.location).font(.caption2).foregroundStyle(Tech.text3).lineLimit(1) }
+                Text(time).font(.caption2).foregroundStyle(Palette.text2.color).monospacedDigit()
+                Text(o.title).font(.caption.weight(.semibold)).foregroundStyle(Palette.text.color).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                if !o.location.isEmpty { Text(o.location).font(.caption2).foregroundStyle(Palette.text3.color).lineLimit(1) }
             }
         }
         .padding(6)

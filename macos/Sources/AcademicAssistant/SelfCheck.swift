@@ -985,7 +985,7 @@ func runSelfCheck() -> Never {
           "filter: showHidden brings a marked item back, still marked hidden")
     var picky = BoardFilter()
     picky.courses = [filterOther.id]
-    picky.types = [.quiz]
+    picky.types = [.exam]
     picky.origins = [.pdf]
     picky.hideUnsure = true
     let rankingFilter = picky.forRanking
@@ -993,6 +993,13 @@ func runSelfCheck() -> Never {
           && rankingFilter.hideUnsure,
           "filter: Do next follows the course and unsure filters only, not type or origin")
     check(Moodle.namedDays("1-2 Dec") == ["12/1", "12/2"], "dates: a range '1-2 Dec' names both days")
+
+    // F1g: non-anchor members only merge on the same day (the anchor rule is tested once it lands).
+    check(cluster([b4("Class cancelled Monday", b3At(2026, 11, 2)), b4("Class cancelled Tuesday", b3At(2026, 11, 3))]).count == 2,
+          "cluster: 'Class cancelled' on Monday and Tuesday stay two cards")
+    check(cluster([b4("TED Script due 1 Nov", b3At(2026, 11, 1, 23, 59)),
+                   b4("TED Script due 1 Nov 9 am", b3At(2026, 11, 1, 9))]).count == 1,
+          "cluster: two news mentions of one 1 Nov deadline are one card")
 
     // MARK: - Done / dismiss / snooze (B5)
 

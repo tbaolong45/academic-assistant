@@ -194,6 +194,17 @@ Clustering runs per subject over all items: union-find on pairs, with n ≈ a fe
   - Weekdays never count as shared words.
   - So "No classes on Monday" / "No classes on Tuesday" → 2 cards. "Class moved to Tuesday" / "Class moved to Thursday" → 2 cards (both moved: ambiguous, so keep both). "Quiz 3 on Tuesday" then "Quiz 3 moved to Thursday" → 1 card dated Thursday.
   - Rationale: a vanished cancellation is worse than a duplicate.
+- **Date window by source (F1g, replaces the general 3-day window; architect 2026-11-03).** Three rounds of review found wrong merges, all from one cause: any two items within 3 days could merge, and each guard patched one shape. The new rule:
+  1. **Anchor pairs.** A pair where one member is a Moodle activity or an assessment (syllabus placeholders included) may merge within **3 days**. Their date is authoritative, and the posts talk about them.
+  2. **Every other pair** (text↔text, calendar↔text, calendar↔calendar) merges only on the **same local calendar day or within 12 h**. Same day covers a time-less "1 Nov" (23:59) against "1 Nov 9 am".
+  3. **Supersede.** The one exception to rule 2 is the existing supersede case: the newer-posted member has a stated move cue, up to 30 days.
+  4. **No bridging.** Every two non-anchor members of one cluster must satisfy rule 2 or 3 *directly*. A union that would break this is refused, like the number-set and ref guards. So no third item can chain two calendar events, two days or two dates together, through a news post or through an anchor.
+  5. The day-set, ref, calendar-ref and number guards stay as a second net.
+- Against the existing checks:
+  - B4 (a), (f), (h) are anchor pairs; (d) is a supersede; (b), (c), (e), (g) are unaffected.
+  - F1e's cases all hold.
+  - Review F1e-P9 #1, #2 (numeric, dotted and relative days included, since the dates differ), #3 and #4 become 2 cards.
+- **What it gives up:** two posts about one event that give dates on different days without a move cue (a typo, or "31 Oct" against "1 Nov"). These now show as 2 cards, which is the agreed trade.
 - **Known, accepted:** "Monday office hours cancelled" (28 Sep) and "Wednesday office hours continue as usual" (30 Sep) merge into one card, and the second shows only in the preview. It's low stakes, and splitting them would need wording polarity.
 
 TED example: "TED-Talk Script (8%)" gives {ted, talk, script}. "TED Script due 1 Nov" gives mainPoint "TED Script due", so {ted, script}. Overlap 2 ≥ min(2, 3, 2) ✓, no numbers ✓, same day ✓. One cluster, and the Moodle assignment wins.

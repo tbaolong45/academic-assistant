@@ -63,15 +63,12 @@ struct CourseView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                TypewriterTitle(text: subject.name)
-                Text("[\(subject.code)]")
-                    .font(.caption.weight(.semibold)).foregroundStyle(Tech.text2)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Tech.line))
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Circle().fill(accent).frame(width: 12, height: 12).accessibilityHidden(true) // the course colour, never behind text
+                Text(subject.name).font(.largeTitle.bold()).foregroundStyle(Palette.text.color).accessibilityAddTraits(.isHeader)
+                Chip(text: subject.code)
             }
-            ShimmerBar(color: accent)
-            Text(stats).font(.caption).foregroundStyle(Tech.text).lineLimit(2)
+            Text(stats).font(.callout).foregroundStyle(Palette.text.color).lineLimit(2)
         }
         .padding(24)
     }
@@ -79,14 +76,14 @@ struct CourseView: View {
     private var stats: AttributedString {
         let next = subject.assessments.first { $0.score == nil && $0.date >= .now }
         let parts = [
-            ("GRADE", subject.runningGrade.map { String(format: "%.1f%%", $0) } ?? "—"),
-            ("DONE", subject.doneShare.map { "\($0)%" } ?? "—"),
-            ("NEXT", next.map { a in let d = daysUntil(a.date); return "\(a.name) \(d == 0 ? "today" : "in \(d)d")" } ?? "—"),
+            ("Grade", subject.runningGrade.map { String(format: "%.1f%%", $0) } ?? "—"),
+            ("Done", subject.doneShare.map { "\($0)%" } ?? "—"),
+            ("Next", next.map { a in let d = daysUntil(a.date); return "\(a.name) \(d == 0 ? "today" : "in \(d)d")" } ?? "—"),
         ]
         var out = AttributedString()
         for (i, (label, value)) in parts.enumerated() {
             var l = AttributedString((i > 0 ? "  ·  " : "") + label + " ")
-            l.foregroundColor = Tech.text3
+            l.foregroundColor = Palette.text2.color
             out += l + AttributedString(value)
         }
         return out
@@ -105,7 +102,7 @@ struct CourseView: View {
         }
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) { Rectangle().fill(Tech.line).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line.color).frame(height: 1) }
     }
 
     private func tabButtons(short: Bool) -> some View {
@@ -114,16 +111,15 @@ struct CourseView: View {
                 let selected = tab == t
                 Button { select(t) } label: {
                     Text(short ? t.short : t.title)
-                        .font(.callout.weight(selected ? .bold : .regular))
-                        .foregroundStyle(selected || hoveredTab == t ? Tech.text : Tech.text2)
+                        .font(.callout.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected || hoveredTab == t ? Palette.text.color : Palette.text2.color)
                         .padding(.vertical, 10)
                         .overlay(alignment: .bottom) {
                             if selected {
-                                Rectangle().fill(Tech.neon).frame(height: 2)
-                                    .shadow(color: Tech.neon, radius: 5)
+                                Rectangle().fill(Palette.accent.color).frame(height: 2)
                                     .matchedGeometryEffect(id: "underline", in: underline)
                             } else if hoveredTab == t {
-                                Rectangle().fill(Tech.neon.opacity(0.3)).frame(height: 1)
+                                Rectangle().fill(Palette.line.color).frame(height: 2)
                             }
                         }
                         .contentShape(Rectangle())
@@ -160,7 +156,7 @@ struct CourseView: View {
                 VStack(spacing: 10) {
                     rows
                     if matchCount == 0 {
-                        Text("// no matches").font(.callout).foregroundStyle(Tech.text3).padding(.top, 24)
+                        Text("No matches").font(.callout).foregroundStyle(Palette.text3.color).padding(.top, 24)
                     }
                 }
                 .animation(.spring(response: 0.35, dampingFraction: 0.85), value: query)
@@ -179,17 +175,17 @@ struct CourseView: View {
 
     private var filterField: some View {
         HStack(spacing: 8) {
-            Text(">").bold().foregroundStyle(Tech.neon)
-            TextField("filter", text: $query, prompt: Text("filter…").foregroundStyle(Tech.text3))
-                .textFieldStyle(.plain).foregroundStyle(Tech.text).focused($filterFocused)
+            Image(systemName: "magnifyingglass").foregroundStyle(Palette.text3.color).accessibilityHidden(true)
+            TextField("Filter", text: $query, prompt: Text("Filter").foregroundStyle(Palette.text3.color))
+                .textFieldStyle(.plain).foregroundStyle(Palette.text.color).focused($filterFocused)
             if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Tech.text3) }
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Palette.text3.color) }
                     .buttonStyle(.plain).accessibilityLabel("Clear filter")
             }
-            Text("⌘F").font(.caption2).foregroundStyle(Tech.text3).accessibilityHidden(true)
+            Text("⌘F").font(.caption2).foregroundStyle(Palette.text3.color).accessibilityHidden(true)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .techPanel(active: filterFocused, radius: 8)
+        .card(active: filterFocused, radius: 8)
     }
 
     private func match(_ title: String) -> Bool { query.isEmpty || title.localizedCaseInsensitiveContains(query) }
@@ -217,17 +213,21 @@ struct CourseView: View {
                     titled(x.title, x.due == .distantFuture ? "no due date" : "due \(x.due.short())", body: x.details)
                 } chips: { _ in
                     if open && x.due != .distantFuture {
-                        Chip(text: "OPEN", fill: subject.hue.palette.tint, edge: accent) {
-                            Circle().fill(accent).frame(width: 6, height: 6).pulse(d >= 0 && d <= 3, color: accent)
+                        Chip(text: "Open") { Circle().fill(accent).frame(width: 6, height: 6) }
+                        if d < 0 {
+                            Chip(text: "\(-d) day\(d == -1 ? "" : "s") late", edge: Palette.critical.color) {
+                                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Palette.critical.color)
+                            }
+                        } else {
+                            Chip(text: d == 0 ? "Due today" : d == 1 ? "Due tomorrow" : "Due in \(d) days")
                         }
-                        Chip(text: d >= 0 ? "T-\(d)d" : "LATE \(-d)d", edge: d <= 3 ? Tech.neon.opacity(0.6) : nil)
                     } else {
-                        Chip(text: "SUBMITTED") { Image(systemName: "checkmark").foregroundStyle(Tech.neon) }
+                        Chip(text: "Submitted") { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.good.color) }
                     }
                 }
             }
             if !practice.isEmpty {
-                SectionLabel("exercises · labs · quizzes").padding(.top, 8)
+                SectionLabel("Exercises, labs and quizzes").padding(.top, 8)
                 ForEach(Array(practice.enumerated()), id: \.element) { i, x in
                     MaterialRow(index: i, subject: subject, material: x, accent: accent, preview: $preview)
                 }
@@ -242,15 +242,15 @@ struct CourseView: View {
                     titled(x.title, "\(x.from) · \(x.date.short())", body: x.body, open: x.key == highlighted)
                 } chips: { _ in
                     if x.date > .now.addingTimeInterval(-2 * 86_400) { NewChip() }
-                    if let k = x.kind { Chip(text: k.label, edge: k.isDated ? accent : nil) { EmptyView() } }
-                    Chip(text: x.source.rawValue.uppercased()) {
+                    if let k = x.kind { Chip(text: k.label.prefix(1) + k.label.dropFirst().lowercased()) }
+                    Chip(text: x.source.rawValue) {
                         Image(systemName: [.moodle: "graduationcap", .message: "bubble.left", .notification: "bell", .outlook: "envelope", .teams: "bubble.left.and.bubble.right"][x.source] ?? "bell")
-                            .foregroundStyle(Tech.text2)
+                            .foregroundStyle(Palette.text2.color)
                     }
                 }
                 .id(x.key)
                 .overlay { // the post a deadline card was opened from
-                    if x.key == highlighted { RoundedRectangle(cornerRadius: 10).strokeBorder(accent, lineWidth: 2).shadow(color: accent, radius: 6) }
+                    if x.key == highlighted { RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.accent.color, lineWidth: 2) }
                 }
             }
         }
@@ -258,8 +258,8 @@ struct CourseView: View {
 
     private func titled(_ title: String, _ meta: String, body: String? = nil, open: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).foregroundStyle(Tech.text)
-            Text(meta).font(.caption).foregroundStyle(Tech.text2)
+            Text(title).foregroundStyle(Palette.text.color)
+            Text(meta).font(.caption).foregroundStyle(Palette.text2.color)
             if let body { ExpandableText(text: body, startOpen: open) }
         }
     }
@@ -271,13 +271,13 @@ private func daysUntil(_ date: Date) -> Int {
     return cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: cal.startOfDay(for: date)).day ?? 0
 }
 
-/// Card row: accent glow and nudge on hover, staggered entrance; chips drop under the title when the row is too narrow.
+/// Card row with the course colour as a 3 pt leading edge; lifts to `raised` on hover; staggered entrance. Chips drop
+/// under the title when the row is too narrow.
 private struct RowCard<Main: View, Chips: View>: View {
     let index: Int, accent: Color
     @ViewBuilder let main: (Bool) -> Main
     @ViewBuilder let chips: (Bool) -> Chips
     @Local private var hovered = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -291,22 +291,17 @@ private struct RowCard<Main: View, Chips: View>: View {
                 HStack(spacing: 8) { chips(hovered) }
             }
         }
-        .padding(.vertical, 14).padding(.leading, 18).padding(.trailing, 14)
+        .padding(.vertical, 14).padding(.leading, 17).padding(.trailing, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .leading) {
-            Capsule().fill(accent).frame(width: 3).padding(.vertical, 12).padding(.leading, 6)
-                .shadow(color: accent.opacity(hovered ? 0.9 : 0), radius: 4)
-        }
-        .techPanel(active: hovered, glow: accent)
-        .offset(x: hovered && !reduceMotion ? 4 : 0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
+        .background(alignment: .leading) { accent.frame(width: 3) } // the course colour is an edge, never a fill
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .card(active: hovered)
         .onHover { hovered = $0 }
         .stagger(index)
         .accessibilityElement(children: .contain) // keep row buttons (Preview, Show in Finder…) individually reachable
     }
 }
 
-/// Small terminal-style tag. Text is always present; colour only tints the fill and edge.
 /// A course file: click to preview (downloads first if needed); Open / Show in Finder / Copy path; shows where it lives.
 /// ponytail: a multi-file Moodle folder previews its first file; "Show in Finder" reveals the rest.
 private struct MaterialRow: View {
@@ -329,13 +324,15 @@ private struct MaterialRow: View {
                         .symbolEffect(.bounce, value: hovered)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(material.title).foregroundStyle(Tech.text)
-                        Text(meta).font(.caption).foregroundStyle(Tech.text2)
+                        Text(material.title).foregroundStyle(Palette.text.color)
+                        Text(meta).font(.caption).foregroundStyle(Palette.text2.color)
                         if let local {
                             Text(local.path(percentEncoded: false).replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                                .font(.caption2).foregroundStyle(Tech.text3).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                                .font(.caption2).foregroundStyle(Palette.text3.color).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         }
-                        if let failure { Text(failure).font(.caption2).foregroundStyle(Color(hex: "ff6b6b")) }
+                        if let failure {
+                            Label(failure, systemImage: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(Palette.critical.color)
+                        }
                         if let t = material.text, t != material.title { ExpandableText(text: t) } // label / description text
                     }
                 }
@@ -346,8 +343,8 @@ private struct MaterialRow: View {
         } chips: { _ in
             if file != nil {
                 if busy { ProgressView().controlSize(.small) }
-                else if saved { Chip(text: "SAVED") { Image(systemName: "checkmark").foregroundStyle(Tech.neon) } }
-                else { Chip(text: "ONLINE") { Image(systemName: "icloud.and.arrow.down").foregroundStyle(Tech.text2) } }
+                else if saved { Chip(text: "Saved") { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.good.color) } }
+                else { Chip(text: "Online") { Image(systemName: "icloud.and.arrow.down").foregroundStyle(Palette.text2.color) } }
                 action("eye", "Preview") { fetch { preview = $0 } }
                 action("arrow.up.forward.app", "Open in its app") { fetch { NSWorkspace.shared.open($0) } }
                 action("folder", "Show in Finder") { fetch { NSWorkspace.shared.activateFileViewerSelecting([$0]) } }
@@ -358,7 +355,7 @@ private struct MaterialRow: View {
             } else if material.link != nil {
                 action("safari", "Open link") { openLink() }
             }
-            Chip(text: material.isPractice ? material.practiceLabel : material.kind.rawValue.uppercased())
+            Chip(text: material.isPractice ? material.practiceLabel.prefix(1) + material.practiceLabel.dropFirst().lowercased() : material.kind.rawValue)
         }
     }
 
@@ -372,7 +369,7 @@ private struct MaterialRow: View {
 
     private func action(_ symbol: String, _ label: String, _ run: @escaping () -> Void) -> some View {
         Button(action: run) { Image(systemName: symbol).frame(width: 22, height: 22) }
-            .buttonStyle(.plain).foregroundStyle(Tech.text2)
+            .buttonStyle(.plain).foregroundStyle(Palette.text2.color)
             .help(label).accessibilityLabel(label)
             .disabled(busy)
     }
@@ -401,11 +398,11 @@ struct ExpandableText: View {
     init(text: String, startOpen: Bool = false) { self.text = text; _open = Local(initialValue: startOpen) }
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(text).font(.callout).foregroundStyle(Tech.text2).lineLimit(open ? nil : 3)
+            Text(text).font(.callout).foregroundStyle(Palette.text2.color).lineLimit(open ? nil : 3)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             if text.count > 160 || text.contains("\n") {
                 Button(open ? "less" : "more") { withAnimation(.easeOut(duration: 0.2)) { open.toggle() } }
-                    .buttonStyle(.plain).font(.caption.weight(.semibold)).foregroundStyle(Tech.neon)
+                    .buttonStyle(.plain).font(.caption.weight(.semibold)).foregroundStyle(Palette.accentInk.color)
             }
         }
         .padding(.top, 2)
@@ -421,12 +418,12 @@ private struct Chip<Leading: View>: View {
     var body: some View {
         HStack(spacing: 5) {
             leading()
-            Text(text).foregroundStyle(fill == nil ? Tech.text2 : Tech.text)
+            Text(text).foregroundStyle(fill == nil ? Palette.text2.color : Palette.text.color)
         }
-        .font(.caption2.weight(.semibold)).tracking(1).monospacedDigit()
-        .padding(.horizontal, 7).padding(.vertical, 3)
-        .background(fill ?? .clear, in: RoundedRectangle(cornerRadius: 4))
-        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(edge ?? Tech.line))
+        .font(.caption2.weight(.semibold)).monospacedDigit()
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(fill ?? Palette.raised.color, in: Capsule())
+        .overlay { if let edge { Capsule().strokeBorder(edge) } }
         .fixedSize()
     }
 }
@@ -437,34 +434,12 @@ extension Chip where Leading == EmptyView {
     }
 }
 
-/// "NEW" tag that blinks a few times when it appears, then stays lit.
+/// "New" chip (posted in the last 2 days): the Campus blue chip, static.
 private struct NewChip: View {
-    @Local private var lit = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
-        Chip(text: "NEW", edge: Tech.neon) { Circle().fill(Tech.neon).frame(width: 5, height: 5) }
-            .shadow(color: Tech.neon.opacity(lit ? 0.6 : 0), radius: 6)
-            .opacity(lit ? 1 : 0.25)
-            .task {
-                guard !reduceMotion else { return }
-                for _ in 0..<6 {
-                    try? await Task.sleep(for: .milliseconds(160))
-                    lit.toggle()
-                }
-                lit = true
-            }
-    }
-}
-
-/// 3pt course-accent bar. Static: the looping light sweep redrew at 60 fps for as long as a course page was open.
-private struct ShimmerBar: View {
-    let color: Color
-
-    var body: some View {
-        Capsule().fill(color)
-        .frame(height: 3)
-        .shadow(color: color.opacity(0.7), radius: 6)
-        .accessibilityHidden(true)
+        Text("New").font(.caption2.weight(.semibold)).foregroundStyle(Palette.accentInk.color)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Palette.accentSoft.color, in: Capsule())
+            .fixedSize()
     }
 }

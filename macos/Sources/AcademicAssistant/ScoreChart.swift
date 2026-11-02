@@ -11,7 +11,6 @@ struct ScoreChart: View {
     @Local private var assumed: [String: Double] = [:] // what-if scores for upcoming assessments
     @Local private var grown = false // bars rise from the baseline once on appear
     @Local private var shown = 0.0 // running grade as it counts up
-    @Local private var ants: CGFloat = 0 // dash phase of the upcoming outlines
     @FocusState private var chartFocused: Bool
     @Environment(\.pixelLength) private var hairline
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -56,30 +55,26 @@ struct ScoreChart: View {
         let toCome = subject.stillToCome
         let done = Int((subject.assessments.reduce(0) { $0 + $1.share } - subject.stillToComeShare).rounded())
         return VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: "running grade")
+            SectionLabel(text: "Running grade")
             Text(subject.runningGrade == nil ? "—" : String(format: "%.1f%%", shown))
-                .font(.system(size: 52, weight: .bold, design: .monospaced))
-                .foregroundStyle(Tech.text)
+                .font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
+                .foregroundStyle(Palette.text.color)
                 .contentTransition(.numericText(value: shown))
-                .shadow(color: Tech.neon.opacity(0.45), radius: 14)
-            ProgressView(value: Double(done), total: 100).tint(Tech.neon).accessibilityLabel("\(done)% of the course graded")
-            Text("from \(done)% of the grade so far · \(toCome)% still to come").font(.callout).foregroundStyle(Tech.text2)
+            ProgressView(value: Double(done), total: 100).tint(Palette.accent.color).accessibilityLabel("\(done)% of the course graded")
+            Text("from \(done)% of the grade so far · \(toCome)% still to come").font(.callout).foregroundStyle(Palette.text2.color)
         }
         .padding(16)
-        .techPanel()
+        .card()
         .accessibilityElement(children: .combine)
     }
 
-    /// Bars grow, ants march and the hero counts up from 0 (all instant under Reduce Motion).
+    /// Bars grow and the hero counts up once (instant under Reduce Motion). Nothing loops: the upcoming outlines are
+    /// static dashes (the marching ants and the 35 ms count-up loop are gone).
     private func intro() async {
         let target = subject.runningGrade ?? 0
         grown = true
         if reduceMotion { shown = target; return }
-        withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) { ants = -10 }
-        for step in 1...24 {
-            try? await Task.sleep(for: .milliseconds(35))
-            withAnimation(.snappy(duration: 0.2)) { shown = (target * Double(step) / 24 * 10).rounded() / 10 }
-        }
+        withAnimation(.easeOut(duration: 0.8)) { shown = target }
     }
 
     // MARK: - Chart
@@ -99,8 +94,8 @@ struct ScoreChart: View {
     private func chart(_ palette: HuePalette, columnWidth: CGFloat, scrolls: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
-                SectionLabel(text: "assessments")
-                Text("←/→ select · ⏎ open").font(.caption2).foregroundStyle(Tech.text3).fixedSize()
+                SectionLabel(text: "Assessments")
+                Text("←/→ select · ⏎ open").font(.caption2).foregroundStyle(Palette.text3.color).fixedSize()
             }
 
             HStack(alignment: .top, spacing: 8) {
@@ -108,14 +103,14 @@ struct ScoreChart: View {
                 ZStack(alignment: .topTrailing) {
                     Color.clear // anchors the stack's top at 0; without it the topmost label shifts everything up
                     ForEach(ticks, id: \.self) { t in
-                        Text("\(t)%").font(.caption2).foregroundStyle(Tech.text3).monospacedDigit()
+                        Text("\(t)%").font(.caption2).foregroundStyle(Palette.text3.color).monospacedDigit()
                             .alignmentGuide(.top) { $0[VerticalAlignment.center] - y(Double(t)) }
                     }
                     if let v = activeValue {
-                        Text("\(Int(v))%").font(.caption2.bold()).foregroundStyle(Tech.text).monospacedDigit()
+                        Text("\(Int(v))%").font(.caption2.bold()).foregroundStyle(Palette.text.color).monospacedDigit()
                             .padding(.horizontal, 3).padding(.vertical, 1)
-                            .background(Tech.panelHi, in: RoundedRectangle(cornerRadius: 3))
-                            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Tech.neon, lineWidth: 1))
+                            .background(Palette.raised.color, in: RoundedRectangle(cornerRadius: 3))
+                            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(Palette.accent.color, lineWidth: 1))
                             .alignmentGuide(.top) { $0[VerticalAlignment.center] - y(v) }
                             .transition(.opacity)
                     }
@@ -129,7 +124,7 @@ struct ScoreChart: View {
                             Color.clear.frame(height: head + plot) // same anchor as the y axis
                             ForEach(ticks, id: \.self) { t in
                                 let dy = y(Double(t))
-                                Rectangle().fill(Tech.line).frame(height: hairline).alignmentGuide(.top) { _ in -dy }
+                                Rectangle().fill(Palette.line.color).frame(height: hairline).alignmentGuide(.top) { _ in -dy }
                             }
                         }
                         .accessibilityHidden(true)
@@ -140,7 +135,7 @@ struct ScoreChart: View {
             legend(palette)
         }
         .padding(16)
-        .techPanel(active: chartFocused)
+        .card(active: chartFocused)
         .focusable()
         .focused($chartFocused)
         .focusEffectDisabled()
@@ -187,7 +182,7 @@ struct ScoreChart: View {
         ZStack(alignment: .top) {
             Color.clear.frame(height: head + plot)
             if let v = activeValue {
-                HLine().stroke(Tech.neon.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                HLine().stroke(Palette.accent.color, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     .frame(height: 1)
                     .alignmentGuide(.top) { _ in -y(v) }
                     .transition(.opacity)
@@ -212,13 +207,13 @@ struct ScoreChart: View {
             VStack(spacing: 6) {
                 VStack(spacing: 4) {
                     Spacer(minLength: 0)
-                    Text(value).font(.caption).foregroundStyle(active ? Tech.text : Tech.text2).monospacedDigit()
+                    Text(value).font(.caption).foregroundStyle(active ? Palette.text.color : Palette.text2.color).monospacedDigit()
                         .contentTransition(.numericText())
                     Group {
                         if let score = a.score {
                             bar.fill(shade).frame(height: grown ? plot * CGFloat(score) / 100 : 0)
                         } else {
-                            bar.strokeBorder(shade, style: StrokeStyle(lineWidth: 2, dash: [6, 4], dashPhase: ants))
+                            bar.strokeBorder(shade, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
                                 .background(alignment: .bottom) {
                                     bar.fill(shade.opacity(0.35))
                                         .frame(height: plot * CGFloat(ghost ?? 0) / 100)
@@ -229,23 +224,22 @@ struct ScoreChart: View {
                         }
                     }
                     .frame(width: 28)
-                    .shadow(color: shade.opacity(active ? 0.9 : 0), radius: 10)
                 }
                 .frame(height: head + plot)
                 .animation(reduceMotion ? nil : .spring(response: 0.6, dampingFraction: 0.72).delay(Double(i) * 0.08), value: grown)
 
                 VStack(spacing: 2) {
-                    Text(a.name).font(.caption).foregroundStyle(Tech.text).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
-                    Text(a.weightText).font(.caption2).foregroundStyle(Tech.text3)
+                    Text(a.name).font(.caption).foregroundStyle(Palette.text.color).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
+                    Text(a.weightText).font(.caption2).foregroundStyle(Palette.text3.color)
                 }
                 .frame(height: 44, alignment: .top) // room for a 2-line name; weight stays right under it
             }
             .frame(width: width)
             .padding(.bottom, 8)
             .contentShape(Rectangle())
-            .background(active ? Tech.panelHi : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .background(active ? Palette.raised.color : .clear, in: RoundedRectangle(cornerRadius: 8))
             .overlay {
-                if chartFocused && focus == i { RoundedRectangle(cornerRadius: 8).strokeBorder(Tech.neon.opacity(0.7), lineWidth: 1) }
+                if chartFocused && focus == i { RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.accent.color, lineWidth: 1.5) }
             }
             .animation(.easeOut(duration: 0.15), value: active)
         }
@@ -256,15 +250,15 @@ struct ScoreChart: View {
     }
 
     private func legend(_ palette: HuePalette) -> some View {
-        let title = Text("Shade = share of course grade").foregroundStyle(Tech.text2)
+        let title = Text("Shade = share of course grade").foregroundStyle(Palette.text2.color)
         let swatches = HStack(spacing: 12) {
             ForEach(bandLabels.indices, id: \.self) { i in
-                Label { Text(bandLabels[i]).foregroundStyle(Tech.text2) } icon: {
+                Label { Text(bandLabels[i]).foregroundStyle(Palette.text2.color) } icon: {
                     RoundedRectangle(cornerRadius: 2).fill(palette.shades[i]).frame(width: 12, height: 12)
                 }
             }
-            Label { Text("Upcoming").foregroundStyle(Tech.text2) } icon: {
-                RoundedRectangle(cornerRadius: 2).strokeBorder(Tech.text2, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])).frame(width: 12, height: 12)
+            Label { Text("Upcoming").foregroundStyle(Palette.text2.color) } icon: {
+                RoundedRectangle(cornerRadius: 2).strokeBorder(Palette.text2.color, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])).frame(width: 12, height: 12)
             }
         }
         return ViewThatFits(in: .horizontal) {
@@ -286,10 +280,10 @@ struct ScoreChart: View {
             }
             .scrollContentBackground(.hidden)
             .frame(height: 200)
-            .techPanel()
+            .card()
             .padding(.top, 8)
         }
-        .foregroundStyle(Tech.text)
+        .foregroundStyle(Palette.text.color)
     }
 }
 
