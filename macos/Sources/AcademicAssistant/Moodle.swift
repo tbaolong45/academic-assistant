@@ -140,11 +140,12 @@ struct Moodle: Sendable {
         // Fallback only: an assignment still waiting on the student keeps its calendar action ("Add submission").
         let pending = Set((events?.events ?? []).filter { $0.modulename == "assign" && $0.action != nil }.compactMap(\.instance))
         // The real status of every assignment (the action list above is capped and fills up with attendance sessions).
-        var submitted: [Int: Bool] = [:], statusError: String?
+        var submitted: [Int: Bool] = [:], extensions: [Int: Int] = [:], statusError: String?
         for a in (assigns?.courses ?? []).flatMap(\.assignments) {
             do {
                 let s: SubmissionStatus = try await call("mod_assign_get_submission_status", [("assignid", String(a.id))])
                 if let st = s.lastattempt?.submission?.status ?? s.lastattempt?.teamsubmission?.status { submitted[a.id] = st == "submitted" }
+                if let ext = s.lastattempt?.extensionduedate, ext > 0 { extensions[a.id] = ext }
             } catch { statusError = statusError ?? Self.redact(error.localizedDescription) }
         }
         if let statusError { warnings.append("Submission status unavailable (\(statusError)); using dates and grades instead") }
@@ -173,7 +174,8 @@ struct Moodle: Sendable {
                     news += posts
                     if f.type == "news" { teacherNews += posts } // dates only from the teacher's news, not classmates' posts
                 }
-                let courseAssigns = assigns?.courses.first { $0.id == c.id }?.assignments ?? []
+                // Effective dates first, so the gradebook items dated by these assignments get the extension too.
+                let courseAssigns = (assigns?.courses.first { $0.id == c.id }?.assignments ?? []).map { Self.effective($0, extension: extensions[$0.id]) }
                 assessments += Self.assessments(grades?.usergrades.first?.gradeitems ?? [], assigns: courseAssigns,
                                                 quizzes: (quizzes?.quizzes ?? []).filter { $0.course == c.id }, fallback: start)
                     .map { Assessment(id: "\(c.id)-\($0.id)", name: $0.name, type: $0.type, date: $0.date, weight: $0.weight, raw: $0.raw, topics: $0.topics, feedback: $0.feedback) }
@@ -311,13 +313,19 @@ extension Moodle {
         let courses: [CourseAssigns]
     }
     struct Assign: Decodable {
-        let id: Int; let name: String; let duedate: Int?
+        let id: Int; let name: String; var duedate: Int?
         var intro: String? = nil
         var introattachments: [Module.Content]? = nil
+        var cutoffdate: Int? = nil // 0 = late work never closes
+        var extended: Bool? = nil // set by `effective`, never sent by Moodle
         init(id: Int, name: String, duedate: Int?) { self.id = id; self.name = name; self.duedate = duedate }
     }
     struct SubmissionStatus: Decodable {
-        struct Attempt: Decodable { struct Sub: Decodable { let status: String? }; let submission: Sub?; let teamsubmission: Sub? }
+        struct Attempt: Decodable {
+            struct Sub: Decodable { let status: String? }
+            let submission: Sub?; let teamsubmission: Sub?
+            var extensionduedate: Int? = nil // this student's extension (0 or missing = none)
+        }
         let lastattempt: Attempt?
     }
     struct CalendarEvents: Decodable { let events: [CalendarEvent] }
@@ -406,6 +414,16 @@ extension Moodle {
         return module == "quiz" ? .quiz : .assignment
     }
 
+    /// Moodle's own rule (T4, renderer::get_time_remaining): an extension later than the due date replaces it, and a
+    /// cutoff closes late work at max(cutoff, extension).
+    static func effective(_ a: Assign, extension ext: Int?) -> Assign {
+        var a = a
+        let due = a.duedate ?? 0, ext = ext ?? 0
+        if ext > 0 { a.duedate = max(due, ext); a.extended = ext > due }
+        if let c = a.cutoffdate, c > 0 { a.cutoffdate = max(c, ext) }
+        return a
+    }
+
     /// Status from mod_assign_get_submission_status when known ("submitted" → submitted, anything else → open);
     /// otherwise from the calendar: still holding an action → open (past due = overdue), no action → submitted.
     static func assignmentItems(_ assigns: [Assign], pending: Set<Int>, now: Date, submitted: [Int: Bool] = [:],
@@ -416,7 +434,8 @@ extension Moodle {
                 // still in the future → open; in the past → open only if the calendar still asks for a submission.
                 let done = graded.contains(a.id) || (submitted[a.id] ?? ($0 > now ? false : !pending.contains(a.id)))
                 return AssignmentItem(title: a.name, due: $0, status: done ? .submitted : .open,
-                                      details: a.intro.map(plainText).flatMap { $0.isEmpty ? nil : $0 }, moodleID: a.id)
+                                      details: a.intro.map(plainText).flatMap { $0.isEmpty ? nil : $0 }, moodleID: a.id,
+                                      cutoff: date(a.cutoffdate ?? 0), extended: a.extended)
             }
         }
         .sorted { $0.due < $1.due }

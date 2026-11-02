@@ -137,6 +137,7 @@ private struct DeadlineCard: View {
         let weight = d.weight.map { Tag(text: "\($0)%", fill: big ? p.tint : nil, edge: big ? p.accent : nil) } // events carry no grade
         let when = Group {
             if d.date < now && d.source != nil { Tag(text: "PAST") } // a mentioned/calendar/document date that has passed: info, not a missed task
+            else if d.isClosed(now: now) { Tag(text: "CLOSED") } // past the cutoff: Moodle no longer takes it
             else if d.date < now { Tag(text: "OVERDUE", edge: red) { Circle().fill(red).frame(width: 5, height: 5) } }
             else { Text(dueText(d.date, now: now)).font(.caption2).foregroundStyle(Tech.text2).monospacedDigit() }
         }
@@ -187,18 +188,18 @@ struct DoNextChip: View {
     var body: some View {
         let d = deadline, accent = d.subject.hue.palette.accent
         BoardButton(glow: accent, action: { if let a = d.announcement { nav.open(d.subject.id, announcement: a) } else { showing = true } }) {
-            HStack(spacing: 8) {
-                Circle().fill(accent).frame(width: 8, height: 8).shadow(color: accent, radius: 3)
-                Text(d.label).font(.caption.weight(.semibold)).foregroundStyle(Tech.text).lineLimit(1)
-                Spacer(minLength: 6)
-                Text(timeLeft(d.date, now: now)).font(.caption2).foregroundStyle(Tech.text2).monospacedDigit().fixedSize()
-                if let w = d.weight { Tag(text: "\(w)%") }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Circle().fill(accent).frame(width: 8, height: 8).shadow(color: accent, radius: 3)
+                    Text(d.label).font(.caption.weight(.semibold)).foregroundStyle(Tech.text).lineLimit(1)
+                }
+                Text(d.reason(now: now)).font(.caption2).foregroundStyle(Tech.text2).lineLimit(1).truncationMode(.middle)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .popover(isPresented: $showing, arrowEdge: .bottom) { DeadlinePreview(deadline: d, now: now) { showing = false; open() } }
-        .accessibilityLabel("Do next: " + spoken(d, now: now))
+        .accessibilityLabel("Do next: " + spoken(d, now: now) + ". " + d.reason(now: now))
     }
 }
 
@@ -234,6 +235,10 @@ struct DeadlinePreview: View {
                 Tag(text: d.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))
                 Tag(text: d.date < now ? "PAST" : "in " + timeLeft(d.date, now: now))
                 if let w = d.weight { Tag(text: "\(w)% OF GRADE", fill: p.tint, edge: p.accent) }
+            }
+            if d.toSubmit || d.kind == .exam { // why it ranks where it does, and where the weight came from
+                Text(d.reason(now: now)).font(.caption).foregroundStyle(Tech.text).fixedSize(horizontal: false, vertical: true)
+                Text(d.weightNote).font(.caption2).foregroundStyle(Tech.text3)
             }
             Text(([d.kind?.label].compactMap { $0 } + [source.uppercased()]).joined(separator: " · "))
                 .font(.caption2.weight(.semibold)).tracking(1).foregroundStyle(Tech.text3)

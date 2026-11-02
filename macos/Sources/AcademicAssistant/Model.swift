@@ -47,6 +47,8 @@ struct AssignmentItem: Hashable, Sendable {
     let title: String, due: Date, status: Status
     var details: String? = nil // the teacher's instructions (assignment description), plain text
     var moodleID: Int? = nil // Assign.id: a stable identity (nil in caches from before B2)
+    var cutoff: Date? = nil // late submissions close then (Moodle cutoffdate, extension applied); nil = late work stays open
+    var extended: Bool? = nil // `due` is the student's extension, later than the assignment's own due date
 }
 
 /// "TED-Talk Script (8%)" / "Critical Writing - Final Paper - 14%" → 8 / 14; nil if the title names no percentage.
@@ -281,12 +283,144 @@ struct Deadline: Identifiable, Sendable {
     var via: Origin? = nil
     var posted: Date? = nil
 
-    var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: nil) }
+    var type: AssessmentType? = nil // for weight and effort defaults; nil = "other" (a text item naming no type)
+    var givenWeight: Weighting? = nil // set by `deadlines()`; read `weighting`
+    var cutoff: Date? = nil
+    var extended: Bool? = nil
 
-    /// Higher = do sooner: weight ÷ days left (ungraded items count as 2%, nothing closer than 6h).
-    func priority(now: Date = .now) -> Double {
-        Double(weight ?? 2) / max(date.timeIntervalSince(now) / 86_400, 0.25)
+    var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: nil) }
+}
+
+// MARK: - Ranking (deadline-priority.md §1, §6; the tables are D1's approved starting values)
+
+/// An item's share of the course grade and where it came from. First match wins: Moodle, syllabus, title, typical.
+struct Weighting: Equatable, Sendable {
+    enum From: Sendable { case moodle, syllabus, title, typical }
+    let value: Double, from: From
+    var spare = false // a syllabus item that may end up dropped ("7.5% if it counts")
+    var estimate: Bool { from == .typical }
+    var text: String {
+        let n = value == value.rounded() ? "\(Int(value))%" : String(format: "%.1f%%", value)
+        return estimate ? "~\(n) est." : spare ? "\(n) if it counts" : n
     }
+}
+
+enum Ranking {
+    static let hoursPerDay = 3.0 // H: focused hours a day on one item
+    static let horizonDays = 28.0 // Do next ranks what's due this far ahead (T4), not just the board's week
+
+    static func typicalWeight(_ t: AssessmentType?) -> Double {
+        switch t {
+        case .final: 30
+        case .midterm: 25
+        case .miniExam, .project: 10
+        case .quiz, .assignment: 5
+        case .lab, nil: 2
+        }
+    }
+
+    static func effortHours(_ t: AssessmentType?, weight w: Double) -> Double {
+        switch t {
+        case .final: 15
+        case .midterm: 10
+        case .miniExam: 5
+        case .quiz: 3
+        case .project: max(6, w)
+        case .assignment: min(max(0.5 * w, 2), 12)
+        case .lab, nil: 2
+        }
+    }
+
+    static func weighting(moodle: Int?, syllabus: Double?, spare: Double?, title: String, type: AssessmentType?) -> Weighting {
+        if let m = moodle, m > 0 { return Weighting(value: Double(m), from: .moodle) }
+        if let s = syllabus, s > 0 { return Weighting(value: s, from: .syllabus) }
+        if let s = spare, s > 0 { return Weighting(value: s, from: .syllabus, spare: true) } // can't know yet which one is dropped
+        if let t = percentInTitle(title) { return Weighting(value: Double(t), from: .title) }
+        return Weighting(value: typicalWeight(type), from: .typical)
+    }
+
+    /// A text item's type, only when its title names one; one Jev calls an exam with no type word counts as a quiz.
+    static func textType(_ title: String, kind: ItemKind?) -> AssessmentType? {
+        let k = Moodle.kind(nil, title)
+        return k != .assignment ? k : kind == .exam ? .quiz : nil
+    }
+}
+
+/// Per-item weight of the syllabus part `name` belongs to (Calculus quizzes: 30 / best 4 = 7.5).
+func syllabusPerItem(_ code: String, _ name: String) -> Double? {
+    syllabusRules[code]?.first { name.range(of: $0.pattern, options: .regularExpression) != nil }.map { $0.total / Double($0.best) }
+}
+
+extension Deadline {
+    var weighting: Weighting { givenWeight ?? Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: title, type: type) }
+    var effortHours: Double { Ranking.effortHours(type, weight: weighting.value) }
+    /// Days you can still wait before starting: time left minus the work, at H focused hours a day.
+    func slack(now: Date) -> Double { date.timeIntervalSince(now) / 86_400 - effortHours / Ranking.hoursPerDay }
+    /// Higher = do sooner: weight ÷ slack. The 0.25 floor puts every "start now" item in one band, ordered by weight.
+    func priority(now: Date = .now) -> Double { weighting.value / max(slack(now: now), 0.25) }
+    var startBy: Date { date.addingTimeInterval(-effortHours / Ranking.hoursPerDay * 86_400) }
+    /// Past the cutoff: Moodle no longer takes it.
+    func isClosed(now: Date) -> Bool { cutoff.map { now > $0 } ?? false }
+
+    /// "12% · due in 2 days · ~6 h of work → start today" (Do next's second line; the preview shows it in full).
+    func reason(now: Date, calendar: Calendar = .current) -> String {
+        let exam = kind == .exam
+        let day = { (d: Date) in
+            d.formatted(Date.VerbatimFormatStyle(format: "\(weekday: .abbreviated) \(day: .defaultDigits) \(month: .abbreviated)",
+                                                 locale: Locale(identifier: "en_US_POSIX"), timeZone: calendar.timeZone, calendar: calendar))
+        }
+        let closed = isClosed(now: now), undated = date == .distantFuture
+        let when: String
+        if closed { when = "closed" }
+        else if undated { when = "no due date" }
+        else if date < now { when = cutoff.map { "late until \(day($0))" } ?? "overdue" }
+        else {
+            let n = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+            let noun = exam ? "exam" : "due"
+            when = (n <= 0 ? "\(noun) today" : n == 1 ? "\(noun) tomorrow" : "\(noun) in \(n) days") + (extended == true ? " (extended)" : "")
+        }
+        let h = effortHours
+        let line = "\(weighting.text) · \(when) · ~\(h == h.rounded() ? "\(Int(h))" : String(format: "%.1f", h)) h \(exam ? "prep" : "of work")"
+        if closed || undated { return line }
+        let s = slack(now: now)
+        if s < 0 {
+            let n = max(1, Int((-s).rounded()))
+            return line + ", behind by ~\(n) day\(n == 1 ? "" : "s")"
+        }
+        return line + (startBy < now || calendar.isDate(startBy, inSameDayAs: now) ? " → start today" : " → start by \(day(startBy))")
+    }
+
+    /// Where the weight came from, for the preview.
+    var weightNote: String {
+        switch weighting.from {
+        case .moodle: return "Weight from Moodle"
+        case .syllabus: return weighting.spare ? "From the syllabus; counts only if it isn't the one dropped" : "Weight from the syllabus"
+        case .title: return "Weight from the title"
+        case .typical:
+            let what = switch type {
+            case .assignment: "an assignment"
+            case .miniExam: "a mini-exam"
+            case let t?: "a \(t.rawValue.lowercased())"
+            case nil: "this kind of item"
+            }
+            return "No weight on Moodle; typical for \(what)"
+        }
+    }
+}
+
+/// Do next (§1.4, D2): the top items by priority among work to hand in and exams due within 28 days. An open Moodle
+/// assignment past its due date stays, as overdue, until its cutoff closes it. Ties go to the earlier date.
+func doNext(_ items: [Deadline], now: Date, limit: Int = 3) -> [Deadline] {
+    let end = now.addingTimeInterval(Ranking.horizonDays * 86_400)
+    return Array(items.filter { d in
+        guard d.toSubmit || d.kind == .exam, d.date < end, !d.isClosed(now: now) else { return false }
+        return d.date >= now || (d.toSubmit && d.resolvedVia == .moodleActivity)
+    }
+    .sorted { a, b in
+        let (pa, pb) = (a.priority(now: now), b.priority(now: now))
+        return pa != pb ? pa > pb : a.date < b.date
+    }
+    .prefix(limit))
 }
 
 /// Every deadline in [start, start + days), soonest first. An open assignment whose title starts with an upcoming
@@ -328,15 +462,24 @@ private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadli
         let handedIn = s.assignments.filter { $0.status != .open }.map(\.title)
         let graded = s.assessments.filter { a in a.score == nil && a.date >= start && a.date < end && !handedIn.contains { sameItem($0, a.name) }
                 && !(a.id.hasPrefix("syllabus/") && a.date < .now) } // a syllabus quiz that already happened is awaiting its mark, not overdue
-            .map { Deadline(id: "\(s.id)/\($0.id)", subject: s, title: $0.name, date: $0.date,
-                            weight: $0.exactWeight == 0 ? nil : Int($0.share.rounded()), // 0 = the quiz currently dropped from "best 4"
-                            kind: [.quiz, .midterm, .final, .miniExam].contains($0.type) ? .exam : .deadline,
-                            memberKey: "g:\(s.id)/\($0.id)", via: $0.id.hasPrefix("syllabus/") ? .syllabus : .moodleActivity) }
+            .map { a -> Deadline in
+                let task = s.assignments.first { sameItem($0.title, a.name) } // its Moodle assignment: cutoff and extension
+                return Deadline(id: "\(s.id)/\(a.id)", subject: s, title: a.name, date: a.date,
+                                weight: a.exactWeight == 0 ? nil : Int(a.share.rounded()), // 0 = the quiz currently dropped from "best 4"
+                                kind: [.quiz, .midterm, .final, .miniExam].contains(a.type) ? .exam : .deadline,
+                                memberKey: "g:\(s.id)/\(a.id)", via: a.id.hasPrefix("syllabus/") ? .syllabus : .moodleActivity, type: a.type,
+                                givenWeight: Ranking.weighting(moodle: a.weight, syllabus: a.exactWeight,
+                                                               spare: a.exactWeight == 0 ? syllabusPerItem(s.code, a.name) : nil, title: a.name, type: a.type),
+                                cutoff: task?.cutoff, extended: task?.extended)
+            }
         let other = s.assignments
             .filter { a in a.status == .open && a.due >= start && a.due < end && !s.assessments.contains { sameItem(a.title, $0.name) } }
             .map { Deadline(id: "\(s.id)/task/\($0.title)", subject: s, title: $0.title, date: $0.due, weight: percentInTitle($0.title),
                             detail: $0.details, kind: .deadline,
-                            memberKey: "a:" + ($0.moodleID.map(String.init) ?? "\(s.id)/\($0.title)"), via: .moodleActivity) }
+                            memberKey: "a:" + ($0.moodleID.map(String.init) ?? "\(s.id)/\($0.title)"), via: .moodleActivity,
+                            type: Moodle.kind(nil, $0.title),
+                            givenWeight: Ranking.weighting(moodle: nil, syllabus: nil, spare: nil, title: $0.title, type: Moodle.kind(nil, $0.title)),
+                            cutoff: $0.cutoff, extended: $0.extended) }
         let dated = (graded + other).map { (title: $0.title.lowercased(), date: $0.date) }
         let all = s.events ?? []
         let events = zip(all, memberKeys(all, subject: s.id))
@@ -348,7 +491,7 @@ private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadli
                 Deadline(id: "\(s.id)/event/\(e.source.rawValue)/\(e.date.timeIntervalSince1970)/\(e.title)", subject: s, title: e.title,
                          date: e.date, weight: percentInTitle(e.title), source: e.source, detail: e.detail, kind: e.kind,
                          summary: e.summary?.accepted == true ? e.summary : nil, announcement: e.announcement,
-                         memberKey: key, via: e.resolvedVia, posted: e.posted)
+                         memberKey: key, via: e.resolvedVia, posted: e.posted, type: Ranking.textType(e.title, kind: e.kind))
             }
         return graded + other + events
     }

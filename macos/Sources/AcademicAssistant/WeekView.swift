@@ -16,8 +16,8 @@ struct WeekView: View {
         let everything = store.board.between(start, cal.date(byAdding: .day, value: 7, to: start)!) // calendar days: DST-safe
         let items = everything.filter { $0.isIn(group) }
         let days = boardDays(items, weekStart: start, now: now)
-        // "Do next" = work to hand in in the next 7 days, most pressing first.
-        let next = store.board.between(now, now.addingTimeInterval(7 * 86_400)).filter(\.toSubmit).sorted { $0.priority(now: now) > $1.priority(now: now) }.prefix(3)
+        // "Do next" = work to hand in and exams in the next 28 days, by priority (deadline-priority.md §1).
+        let next = doNext(store.board, now: now)
 
         // Breakpoints come from the width the pane offers, never from the board's own size (see CLAUDE.md).
         GeometryReader { g in
