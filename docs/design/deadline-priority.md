@@ -188,6 +188,12 @@ Clustering runs per subject over all items: union-find on pairs, with n ≈ a fe
 - *Same source text:* the same non-nil `ref` (one PDF or course-page note) with different dates means different items, e.g. a schedule listing "Final Project Presentation" on 8 and 10 Dec. A real move inside one text is unaffected, because §2.3 already drops the "from" date.
 - *Moved window:* the 30-day window opens only for a stated cue (`moved == true`). Jev's `class_change` still picks the date (§2.4) but within 3 days only, because Jev labels holidays ("no classes") `class_change`.
 - *Fast path:* `sameItem` uses the same 3-day window; F1's interim ±7 days is gone.
+- **Named days (F1e #2, B4 review #2):**
+  - Let `days(x)` be the weekdays and explicit dates named in x's title or source sentence.
+  - If both members have non-empty `days` and the sets don't overlap, they don't merge. The one exception is when the **newer-posted** member has a stated move cue and the older one has none, which is a supersede.
+  - Weekdays never count as shared words.
+  - So "No classes on Monday" / "No classes on Tuesday" → 2 cards. "Class moved to Tuesday" / "Class moved to Thursday" → 2 cards (both moved: ambiguous, so keep both). "Quiz 3 on Tuesday" then "Quiz 3 moved to Thursday" → 1 card dated Thursday.
+  - Rationale: a vanished cancellation is worse than a duplicate.
 - **Known, accepted:** "Monday office hours cancelled" (28 Sep) and "Wednesday office hours continue as usual" (30 Sep) merge into one card, and the second shows only in the preview. It's low stakes, and splitting them would need wording polarity.
 
 TED example: "TED-Talk Script (8%)" gives {ted, talk, script}. "TED Script due 1 Nov" gives mainPoint "TED Script due", so {ted, script}. Overlap 2 ≥ min(2, 3, 2) ✓, no numbers ✓, same day ✓. One cluster, and the Moodle assignment wins.

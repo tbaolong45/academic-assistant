@@ -8,23 +8,23 @@ struct Token: Sendable {
 }
 
 /// Direction A "Campus" (docs/design/ui-redesign.md §4): every text pair ≥ 4.5:1 in both appearances (dataviz validator;
-/// worst: text3 on raised 4.81 light, onAccent on accent 4.65 dark). Blue belongs to the UI only, never to a course.
+/// worst: text3 on raised 4.81 light, onAccent on accent 5.58 dark; dark retuned in U1c, §6.1). Blue belongs to the UI only, never to a course.
 enum Palette {
-    static let bg = Token(light: "f4f6fa", dark: "0f141c") // window background
-    static let surface = Token(light: "ffffff", dark: "171d27") // cards, sheets
-    static let raised = Token(light: "eef2f8", dark: "1f2733") // hovered or selected rows, inputs
-    static let line = Token(light: "d9e0ea", dark: "2b3442") // decorative hairlines only (~1.3:1): never a control's only edge
-    static let text = Token(light: "0f172a", dark: "e8edf5")
-    static let text2 = Token(light: "475569", dark: "a9b4c4")
-    static let text3 = Token(light: "5f6b7d", dark: "8d99ab")
-    static let accent = Token(light: "2563eb", dark: "2f6fe4") // blue fills: primary button, selection bar, today marker
-    static let onAccent = Token(light: "ffffff", dark: "ffffff") // text on `accent`
-    static let accentInk = Token(light: "1d4fc4", dark: "7eaaff") // blue text and icons
-    static let accentSoft = Token(light: "e6eefd", dark: "1a2a47") // blue wash behind a selected row or chip
+    static let bg = Token(light: "f4f6fa", dark: "060c18") // window background
+    static let surface = Token(light: "ffffff", dark: "141b2c") // cards, sheets
+    static let raised = Token(light: "eef2f8", dark: "222c41") // hovered or selected rows, inputs
+    static let line = Token(light: "d9e0ea", dark: "394459") // decorative hairlines only (~1.3:1): never a control's only edge
+    static let text = Token(light: "0f172a", dark: "f4f7fc")
+    static let text2 = Token(light: "475569", dark: "cad3e4")
+    static let text3 = Token(light: "5f6b7d", dark: "a6b0c3")
+    static let accent = Token(light: "2563eb", dark: "3d89ff") // blue fills: primary button, selection bar, today marker
+    static let onAccent = Token(light: "ffffff", dark: "081123") // text on `accent`
+    static let accentInk = Token(light: "1d4fc4", dark: "7db3ff") // blue text and icons
+    static let accentSoft = Token(light: "e6eefd", dark: "1a3467") // blue wash behind a selected row or chip
     // Status (dataviz reference set, the same in both appearances). Always with an icon and a label, never colour alone.
-    static let good = Token(light: "0ca30c", dark: "0ca30c")
-    static let warning = Token(light: "fab219", dark: "fab219")
-    static let critical = Token(light: "d03b3b", dark: "d03b3b")
+    static let good = Token(light: "0ca30c", dark: "49df6e")
+    static let warning = Token(light: "fab219", dark: "ffc347")
+    static let critical = Token(light: "d03b3b", dark: "fe726e")
 }
 
 /// Old names kept for one step so every view compiles on the new palette; U6 renames the uses and deletes this.
@@ -64,12 +64,12 @@ extension Hue {
             HuePalette(ramp: zip(light, dark).map(Token.init), mark: Token(light: mark.0, dark: mark.1), wash: Token(light: wash.0, dark: wash.1))
         }
         return switch self {
-        case .green: p(["77c4a3", "24ab7e", "078661", "015f43"], ["076246", "078661", "05ac7d", "69d6aa"], mark: ("047554", "057c59"), wash: ("e6f1ee", "142c2f"))
-        case .orange: p(["dfa17c", "d07940", "af5504", "7d3a01"], ["79421e", "ab5819", "d8732b", "fba773"], mark: ("9a4901", "a24e04"), wash: ("f5ede6", "2d2521"))
-        case .yellow: p(["c9ae6d", "b38c15", "8d6d01", "644c00"], ["674f00", "8d6d01", "b48c05", "deb95c"], mark: ("c39806", "b48c05"), wash: ("f9f5e6", "302f22"))
-        case .magenta: p(["dd9ab9", "cc6f9d", "af467e", "7e2e59"], ["773c59", "a84e7c", "d4679f", "f89dc9"], mark: ("c0558d", "d4679f"), wash: ("f9eef4", "35293a"))
-        case .violet: p(["baa4e2", "9f7ed6", "8059bb", "5b3d87"], ["5a467d", "7e5db1", "a17adf", "c9acff"], mark: ("ad87ed", "7750b1"), wash: ("f7f3fd", "26253d"))
-        case .slate: p(["a3acb9", "7f8a9a", "5e6a7b", "3e4857"], ["4f5a6a", "6c7889", "939fb0", "c3cbd7"], mark: ("5e6a7b", "939fb0"), wash: ("eff0f2", "262d37"))
+        case .green: p(["77c4a3", "24ab7e", "078661", "015f43"], ["047554", "089e72", "05c992", "77efbf"], mark: ("047554", "009068"), wash: ("e6f1ee", "063223"))
+        case .orange: p(["dfa17c", "d07940", "af5504", "7d3a01"], ["9a4825", "d55c27", "ff8350", "fec5b0"], mark: ("9a4901", "c14802"), wash: ("f5ede6", "412013"))
+        case .yellow: p(["c9ae6d", "b38c15", "8d6d01", "644c00"], ["7b5f01", "a58108", "d2a402", "f8cf68"], mark: ("c39806", "b48c05"), wash: ("f9f5e6", "352803"))
+        case .magenta: p(["dd9ab9", "cc6f9d", "af467e", "7e2e59"], ["95426a", "cd5590", "ff72b7", "ffbfda"], mark: ("c0558d", "e4569e"), wash: ("f9eef4", "3e1e2d"))
+        case .violet: p(["baa4e2", "9f7ed6", "8059bb", "5b3d87"], ["734f99", "9e68d5", "c48cfe", "e0c8fe"], mark: ("ad87ed", "914ad0"), wash: ("f7f3fd", "302340"))
+        case .slate: p(["a3acb9", "7f8a9a", "5e6a7b", "3e4857"], ["596475", "7b8799", "9facbe", "c8d5e8"], mark: ("5e6a7b", "9facbe"), wash: ("eff0f2", "242c38"))
         // Legacy: old caches and the sample data still say "blue". Not handed out any more (it would read as UI blue).
         case .blue: p(["85b4f0", "5591dd", "2d6fbe", "154d8c"], ["2d4e78", "3d73b6", "5b9df0", "9eceff"], mark: ("2d6fbe", "5b9df0"), wash: ("e9f3ff", "142234"))
         }

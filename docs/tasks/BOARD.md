@@ -26,9 +26,10 @@ Only the coordinator edits this file. Agents report status in their terminal; th
 | B3 | Priority + Do next (cutoffdate/extensionduedate, 28-day Do next) | Builder + Test writer | Model, Moodle, WeekView, WeekBoardParts | done; checks (a)-(h) pending; review pending |
 | F1d | Fixes from reviews B2, F1c (4 items, 1 Medium) | Builder + Test writer | see docs/tasks/F1d-review-fixes.md | done (d962b69 + next commit); review pending |
 | B4 | Cross-source dedupe (clusters), moved cue | Builder + Test writer | Model, Moodle, WeekBoardParts | done (e864d77); 4 deviations approved by architect (§2.2 As built); checks + review pending |
+| F1e | Wrong merges from B4 review (2 Medium) | Builder + Test writer | Model.swift (see docs/tasks/F1e-review-fixes.md) | next (before P9); #2 rule decided |
 | P9 | Skip AI titles for members hidden behind a Moodle-activity winner | Builder + Test writer | Summarizer.swift, Model.swift | APPROVED by user 2026-11-03; build after U1c |
 | B5 | Marks (done/dismiss/snooze) keyed by memberKey | Builder + Test writer | BoardState (new), Model, Store, WeekBoardParts | done; checks + review pending |
-| U1c (build) | Dark retune | Builder | Theme.swift | in progress |
+| U1c (build) | Dark retune | Builder | Theme.swift | done; palette checks (a)-(e) pending; screenshots wait for cert |
 | U4 | Overview + Deadlines restyle, endless-animation removal | Builder | HomeView, WeekView, WeekBoardParts | done (code); screenshots + idle CPU wait for signing cert |
 | U1c | Dark mode: brighter, more contrast, livelier hues (user request) | Architect → Builder | ui-redesign.md, then Theme.swift | APPROVED by user 2026-11-03 (as previewed); build after B5 |
 | P4 | Mail progress: per-message saves, retry cap, skipped-date count | Builder + Test writer | SchoolMail.swift, Store.swift | done; checks (c),(e) pending; review pending |
