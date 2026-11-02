@@ -3,8 +3,8 @@ import Synchronization
 import PDFKit
 
 /// Local copies of Moodle course files: ~/Documents/Academic Assistant/<Course>/<file>.
-/// A material with several files (a Moodle folder) gets its own sub-folder. Files already on disk with the
-/// same size are skipped, so each sync only fetches what's new or changed.
+/// A material with several files (a Moodle folder) gets its own sub-folder. Files already on disk with the same size
+/// and a modification date no older than Moodle's are skipped, so each sync only fetches what's new or changed.
 enum MaterialStore {
     static let root = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: "Documents/Academic Assistant", directoryHint: .isDirectory)
@@ -17,9 +17,18 @@ enum MaterialStore {
         return dir.appending(path: safe(file.name))
     }
 
+    /// On disk and current (F1i #1): not empty, the size Moodle reports, and modified no earlier than Moodle's
+    /// `timemodified`. A download is stamped with that time; a file saved before F1i carries its (later) download time,
+    /// so it still counts, while a same-size update on Moodle is fetched again.
     static func isSaved(_ url: URL, _ file: MaterialFile) -> Bool {
-        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false)))?[.size] as? Int else { return false }
-        return file.size == 0 || size == file.size
+        guard let local = attributes(url), local.size > 0 else { return false }
+        return (file.size == 0 || local.size == file.size) && (file.modified <= 0 || local.modified >= file.modified)
+    }
+
+    /// The local file's size and modification time (whole seconds), or nil when it isn't there.
+    static func attributes(_ url: URL) -> (size: Int, modified: Int)? {
+        guard let a = try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false)), let size = a[.size] as? Int else { return nil }
+        return (size, Int(((a[.modificationDate] as? Date) ?? .distantPast).timeIntervalSince1970))
     }
 
     /// Every file of every material that should be on disk, in course order.
@@ -54,10 +63,15 @@ enum MaterialStore {
         try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: to)
         try FileManager.default.moveItem(at: tmp, to: to)
+        if file.modified > 0 { // Moodle's time, so `isSaved` sees a later update even when the size stays the same
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(file.modified))],
+                                                  ofItemAtPath: to.path(percentEncoded: false))
+        }
     }
 
-    private static func key(_ url: URL, _ f: MaterialFile) -> PDFCache.Key {
-        PDFCache.Key(path: url.path(percentEncoded: false), size: f.size, modified: f.modified)
+    /// The cache key of the file on disk (F1i #2), so whatever is there is what gets parsed.
+    private static func key(_ url: URL) -> PDFCache.Key? {
+        attributes(url).map { PDFCache.Key(path: url.path(percentEncoded: false), size: $0.size, modified: $0.modified) }
     }
 
     /// Dates written in every downloaded PDF (syllabus, schedules, briefs, slides…), per subject id, and how many PDFs gave
@@ -68,8 +82,9 @@ enum MaterialStore {
             for m in s.materials {
                 for f in m.files ?? [] where f.name.lowercased().hasSuffix(".pdf") {
                     let url = localURL(s, m, f)
-                    guard isSaved(url, f), let entry = PDFCache.entry(key(url, f), load: { PDFDocument(url: url)?.string }) else { skipped += 1; continue }
                     let posted = PDFCache.posted(f.modified)
+                    guard isSaved(url, f), let k = key(url), let entry = PDFCache.entry(k, posted: posted, load: { PDFDocument(url: url)?.string })
+                    else { skipped += 1; continue }
                     out[s.id, default: []] += entry.found
                         // skip Moodle's download stamp ("…203.0.113.7 on Wed, 09 Sep 2026 06:48 UTC") and repeats across pages
                         .filter { ($0.detail ?? "").range(of: #"\b\d{1,3}(\.\d{1,3}){3}\b"#, options: .regularExpression) == nil }
@@ -92,7 +107,8 @@ enum MaterialStore {
         for m in s.materials {
             for f in m.files ?? [] where f.name.lowercased().hasSuffix(".pdf") {
                 let url = localURL(s, m, f)
-                guard isSaved(url, f), let text = PDFCache.entry(key(url, f), load: { PDFDocument(url: url)?.string })?.text else { continue }
+                guard isSaved(url, f), let fileKey = key(url),
+                      let text = PDFCache.entry(fileKey, posted: PDFCache.posted(f.modified), load: { PDFDocument(url: url)?.string })?.text else { continue }
                 let lines = text.components(separatedBy: .newlines)
                 var i = 0
                 while i < lines.count {
@@ -130,13 +146,21 @@ enum PDFCache {
     /// The file's Moodle modified time, or now when Moodle gave none.
     static func posted(_ modified: Int) -> Date { modified > 0 ? Date(timeIntervalSince1970: Double(modified)) : .now }
     private static let entries = Mutex<[String: (key: Key, entry: Entry)]>([:]) // by path: a changed file replaces its entry
+    // ponytail: one lock for every parse, so a second caller waits for the first instead of parsing the same PDF again
+    // (F1i #4); parses of different files queue too. Per-key locks if the preview's wait ever shows.
+    private static let parsing = Mutex(())
 
     /// The cached entry for `key`, else `load()` (the file read) parsed and stored; nil when the file has no text.
-    static func entry(_ key: Key, load: () -> String?) -> Entry? {
-        if let hit = entries.withLock({ $0[key.path] }), hit.key == key { return hit.entry }
-        guard let text = load() else { return nil }
-        let entry = Entry(text: text, found: Moodle.mentionedDates(text, posted: posted(key.modified), source: .document, strict: true))
-        entries.withLock { $0[key.path] = (key, entry) }
-        return entry
+    /// `posted` dates the text's relative years (Moodle's modified time); by default the key's.
+    static func entry(_ key: Key, posted when: Date? = nil, load: () -> String?) -> Entry? {
+        func hit() -> Entry? { entries.withLock { $0[key.path] }.flatMap { $0.key == key ? $0.entry : nil } }
+        if let e = hit() { return e }
+        return parsing.withLock { _ in
+            if let e = hit() { return e } // parsed by the caller we waited for
+            guard let text = load() else { return nil }
+            let entry = Entry(text: text, found: Moodle.mentionedDates(text, posted: when ?? posted(key.modified), source: .document, strict: true))
+            entries.withLock { $0[key.path] = (key, entry) }
+            return entry
+        }
     }
 }

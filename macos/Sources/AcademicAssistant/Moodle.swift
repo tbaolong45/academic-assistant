@@ -92,8 +92,11 @@ struct Moodle: Sendable {
     func siteInfo() async throws -> SiteInfo { try await call("core_webservice_get_site_info") }
 
     /// Non-fatal call: on failure, records a warning and returns nil. A rejected key still fails the sync.
+    /// A cancelled sync (disconnect, or a failed sibling in `boundedMap`) stops instead of turning into warnings (F1i #3).
     private func soft<T: Decodable>(_ label: String, _ fn: String, _ params: [(String, String)], _ warnings: inout [String]) async throws -> T? {
+        try Task.checkCancellation()
         do { return try await call(fn, params) } catch MoodleError.invalidToken { throw MoodleError.invalidToken } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() } // URLSession reports it as a network error
             warnings.append("\(label): \(error.localizedDescription)")
             return nil
         }
@@ -176,7 +179,10 @@ struct Moodle: Sendable {
             do {
                 let s: SubmissionStatus = try await self.call("mod_assign_get_submission_status", [("assignid", String(id))])
                 return (s.lastattempt?.submission?.status ?? s.lastattempt?.teamsubmission?.status, s.lastattempt?.extensionduedate, nil)
-            } catch { return (nil, nil, Self.redact(error.localizedDescription)) }
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                return (nil, nil, Self.redact(error.localizedDescription))
+            }
         }
         for (id, s) in zip(assignIDs, statuses) {
             if let st = s.status { submitted[id] = st == "submitted" }
