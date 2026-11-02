@@ -480,6 +480,19 @@ extension Moodle {
     private static let time = try! NSRegularExpression(pattern: #"(?i)\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(\d{1,2}):(\d{2})\b"#)
     private static let dateOnly = try! NSRegularExpression(pattern: #"(?i)^(?:"# + mon + #"\.?\s+\d{1,2}(?:st|nd|rd|th)?|\d{1,2}(?:st|nd|rd|th)?\s+"# + mon + #")$"#)
 
+    /// The weekdays and explicit dates a text names ("tue", "11/3"): "Class moved to Tuesday" ≠ "Class moved to Thursday".
+    static func namedDays(_ text: String) -> Set<String> {
+        let ns = text as NSString, all = NSRange(location: 0, length: ns.length)
+        func g(_ m: NSTextCheckingResult, _ i: Int) -> String { m.range(at: i).location == NSNotFound ? "" : ns.substring(with: m.range(at: i)) }
+        func month(_ s: String) -> Int? { months.firstIndex { s.lowercased().hasPrefix($0) }.map { $0 + 1 } }
+        var out = Set(text.lowercased()
+            .matches(of: /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tues?|wed|thur?s?|fri|sat|sun)\b/)
+            .map { String($0.1.prefix(3)) })
+        for m in dayMonth.matches(in: text, range: all) { if let d = Int(g(m, 1)), let mo = month(g(m, 2)) { out.insert("\(mo)/\(d)") } }
+        for m in monthDay.matches(in: text, range: all) { if let d = Int(g(m, 2)), let mo = month(g(m, 1)) { out.insert("\(mo)/\(d)") } }
+        return out
+    }
+
     /// A sentence saying a date moved: "postponed to", "pushed back until", "extended till", "moved from 20 Oct to".
     static let moveCue = #"(?i)\b(moved|postponed|pushed(?: back)?|extended|rescheduled|delayed|shifted|changed)\b[^.]{0,60}?\b(to|until|till)\b"#
 

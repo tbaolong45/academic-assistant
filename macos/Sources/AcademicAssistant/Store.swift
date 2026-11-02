@@ -205,10 +205,7 @@ func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [School
     private func summarize() {
         guard isConnected, lastSynced != nil, !summarizing, !classifying, let jev = Keychain.read(host: Jev.account), let ds = Keychain.read(host: DeepSeek.account) else { return }
         let window = Date.now.addingTimeInterval(-7 * 86_400)...Date.now.addingTimeInterval(120 * 86_400)
-        var seen = Set<String>()
-        let todo = subjects.flatMap { s in (s.events ?? []).map { (course: s.name, event: $0) } }
-            .filter { window.contains($0.event.date) && $0.event.kind?.isDated != false && titles[Summarizer.id($0.event)] == nil
-                && seen.insert(Summarizer.id($0.event)).inserted }
+        let todo = Summarizer.targets(subjects, board: items, titles: titles, window: window)
         guard !todo.isEmpty else { return }
         summarizing = true
         let gen = generation

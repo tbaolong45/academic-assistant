@@ -312,6 +312,8 @@ struct Deadline: Identifiable, Sendable {
     var dateChanged = false // dismissed or snoozed, then its date moved by more than 12 h (D4)
 
     var resolvedVia: Origin { via ?? Origin.inferred(source: source, detail: detail, text: nil) }
+    /// The id of the card a subject's event becomes (`deadlines()`; the summarizer finds hidden members by it).
+    static func eventID(_ s: Subject, _ e: CourseEvent) -> String { "\(s.id)/event/\(e.source.rawValue)/\(e.date.timeIntervalSince1970)/\(e.title)" }
     /// A move cue in the text, or Jev's "class change" label (it catches wording the regex misses).
     var isMoved: Bool { moved == true || kind == .classChange }
     /// "announcement (Thu 29 Oct), PDF": where else this item was found, for the preview.
@@ -529,7 +531,7 @@ private func deadlines(_ subjects: [Subject], in window: Range<Date>) -> [Deadli
             .filter { e, _ in e.kind?.isDated != false && hasContent(e.title) } // not a bare "Dec 8 — -"
             .map { e, key in
                 let type = Ranking.textType(e.title, kind: e.kind)
-                return Deadline(id: "\(s.id)/event/\(e.source.rawValue)/\(e.date.timeIntervalSince1970)/\(e.title)", subject: s, title: e.title,
+                return Deadline(id: Deadline.eventID(s, e), subject: s, title: e.title,
                                 date: e.date, weight: percentInTitle(e.title), source: e.source, detail: e.detail, kind: e.kind,
                                 summary: e.summary?.accepted == true ? e.summary : nil, announcement: e.announcement,
                                 memberKey: key, via: e.resolvedVia, posted: e.posted, type: type,
@@ -565,6 +567,10 @@ func titleNumbers(_ title: String) -> Set<String> {
 func cluster(_ items: [Deadline]) -> [Deadline] {
     let words = items.map { clusterWords($0.title) }, numbers = items.map { titleNumbers($0.title) }
     let titles = items.map { $0.title.lowercased() }
+    // F1e #2: the days a text item names, from its title and the sentence it came from (a Moodle item's detail is its
+    // instructions, so only the title counts there).
+    let days = items.map { Moodle.namedDays($0.title + ($0.source == .announcement || $0.source == .document ? " " + ($0.detail ?? "") : "")) }
+    var refDates = items.map { d in d.ref.map { [$0: d.date] } ?? [:] } // per cluster root (F1e #3)
     var parent = Array(items.indices)
     var nums = numbers, activity = items.map { $0.resolvedVia == .moodleActivity } // per cluster root
     func root(_ i: Int) -> Int {
@@ -584,6 +590,15 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
         guard a.subject.id == b.subject.id || (general && shared >= 2) else { return false }
         // Rows of one schedule ("Dec 8 — Presentation", "Dec 10 — Presentation") are separate dates, not repeated mentions.
         if let r = a.ref, r == b.ref, a.date != b.date { return false }
+        // F1e #1: two events of one calendar with different ids are two events ("Seminar" on 20 and 22 Oct).
+        if a.resolvedVia == b.resolvedVia, [.moodleCalendar, .outlookCalendar].contains(a.resolvedVia),
+           let ra = a.ref, let rb = b.ref, ra != rb, a.moved != true, b.moved != true { return false }
+        // F1e #2: different named days are different items ("No classes on Monday" / "… on Tuesday"), unless the newer
+        // post states a move and the older doesn't ("Quiz 3 on Tuesday", then "Quiz 3 moved to Thursday").
+        if !days[i].isEmpty, !days[j].isEmpty, days[i].isDisjoint(with: days[j]) {
+            let (old, new) = (a.posted ?? .distantPast) <= (b.posted ?? .distantPast) ? (a, b) : (b, a)
+            guard new.moved == true, old.moved != true else { return false }
+        }
         let gap = abs(a.date.timeIntervalSince(b.date))
         guard gap <= 3 * 86_400 || (gap <= 30 * 86_400 && (movedAfter(i, j) || movedAfter(j, i))) else { return false }
         if titles[i] == titles[j] || sameItem(titles[i], titles[j]) || sameItem(titles[j], titles[i]) { return true } // fast path
@@ -595,10 +610,12 @@ func cluster(_ items: [Deadline]) -> [Deadline] {
             let (a, b) = (root(i), root(j))
             guard a != b,
                   !(activity[a] && activity[b]), // two Moodle activities are two submissions, never one item
-                  nums[a].isEmpty || nums[b].isEmpty || nums[a] == nums[b] // a numberless post can't chain Quiz 3 to Quiz 4
+                  nums[a].isEmpty || nums[b].isEmpty || nums[a] == nums[b], // a numberless post can't chain Quiz 3 to Quiz 4
+                  refDates[b].allSatisfy({ r, t in refDates[a][r].map { $0 == t } ?? true }) // F1e #3: no ref at two dates via a bridge
             else { continue }
             parent[b] = a
             nums[a].formUnion(nums[b])
+            refDates[a].merge(refDates[b]) { x, _ in x }
             activity[a] = activity[a] || activity[b]
         }
     }

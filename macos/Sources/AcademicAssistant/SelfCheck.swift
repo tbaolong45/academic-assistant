@@ -405,6 +405,28 @@ func runSelfCheck() -> Never {
         check(worst.value >= 4.5,
               "palette: every text pair is ≥ 4.5:1 in \(mode) (worst: \(worst.name) \(String(format: "%.2f", worst.value)):1)")
     }
+    // U1c: the brighter dark appearance.
+    let darkOnlyPairs: [(String, Token, Token)] = [
+        ("accentInk on raised", Palette.accentInk, Palette.raised), ("good on surface", Palette.good, Palette.surface),
+        ("warning on surface", Palette.warning, Palette.surface), ("critical on surface", Palette.critical, Palette.surface),
+        ("good on raised", Palette.good, Palette.raised), ("critical on raised", Palette.critical, Palette.raised),
+    ]
+    let darkPairFails = darkOnlyPairs.map { ($0.0, contrast($0.1.dark, $0.2.dark)) }.filter { $0.1 < 4.5 }
+    check(darkPairFails.isEmpty,
+          "palette: status and accentInk text is ≥ 4.5:1 on dark surface/raised (failing: \(darkPairFails.map { "\($0.0) \(String(format: "%.2f", $0.1))" }))")
+    let surfaceStep = contrast(Palette.surface.dark, Palette.bg.dark)
+    let raisedStep = contrast(Palette.raised.dark, Palette.surface.dark)
+    check(surfaceStep >= 1.12 && raisedStep >= 1.2,
+          "palette: dark cards stand off the page (surface/bg \(String(format: "%.2f", surfaceStep)) ≥ 1.12, raised/surface \(String(format: "%.2f", raisedStep)) ≥ 1.2)")
+    check(contrast(Palette.accent.light, Palette.surface.light) >= 3 && contrast(Palette.accent.dark, Palette.surface.dark) >= 3,
+          "palette: accent is ≥ 3:1 against surface in both appearances")
+    let washFails = Hue.allCases.compactMap { hue -> (String, Double)? in
+        let wash = hue.palette.wash
+        let low = min(contrast(Palette.text3.light, wash.light), contrast(Palette.text3.dark, wash.dark))
+        return low >= 4.5 ? nil : (hue.rawValue, low)
+    }
+    check(washFails.isEmpty,
+          "palette: text3 is ≥ 4.5:1 on every course wash in both appearances (failing: \(washFails.map { "\($0.0) \(String(format: "%.2f", $0.1))" }))")
     check(Hue.courseHues == [.green, .orange, .yellow, .magenta, .violet] && !Hue.courseHues.contains(.blue)
           && Set(Hue.courseHues).count == 5,
           "palette: course hues are green, orange, yellow, magenta, violet (5, no repeats); blue belongs to the UI")
@@ -879,6 +901,40 @@ func runSelfCheck() -> Never {
     check(weighted.count == 1 && weighted[0].weighting.value == 14 && weighted[0].weighting.text == "14%",
           "cluster: a PDF's '(14%)' gives the weightless Moodle item its weight (got \(weighted.first?.weighting.text ?? "none"))")
 
+    // MARK: - Wrong merges (F1e)
+
+    let seminar1 = b4("Seminar", b3At(2026, 10, 20), via: .moodleCalendar, ref: "41")
+    let seminar2 = b4("Seminar", b3At(2026, 10, 22), via: .moodleCalendar, ref: "42")
+    check(cluster([seminar1, seminar2]).count == 2, "cluster: two Moodle 'Seminar' events with different ids stay two cards")
+    let fair1 = b4("Career Fair", b3At(2026, 10, 20), via: .outlookCalendar, ref: "UID-A")
+    let fair2 = b4("Career Fair", b3At(2026, 10, 22), via: .outlookCalendar, ref: "UID-B")
+    check(cluster([fair1, fair2]).count == 2, "cluster: two Outlook 'Career Fair' events with different UIDs stay two cards")
+    let classTuesday = b4("Class moved to Tuesday", b3At(2026, 11, 3), posted: b3At(2026, 10, 30), moved: true)
+    let classThursday = b4("Class moved to Thursday", b3At(2026, 11, 5), posted: b3At(2026, 10, 30), moved: true)
+    check(cluster([classTuesday, classThursday]).count == 2,
+          "cluster: 'Class moved to Tuesday' and '… to Thursday' stay two cards")
+    check(cluster([b4("No classes on Monday", b3At(2026, 11, 2)), b4("No classes on Tuesday", b3At(2026, 11, 3))]).count == 2,
+          "cluster: 'No classes on Monday' and '… on Tuesday' stay two cards")
+    let quizOnTuesday = b4("Quiz 3 on Tuesday", b3At(2026, 11, 3), posted: b3At(2026, 10, 28))
+    let quizMovedThursday = b4("Quiz 3 moved to Thursday", b3At(2026, 11, 5), posted: b3At(2026, 10, 30), moved: true)
+    let superseded = cluster([quizOnTuesday, quizMovedThursday])
+    check(superseded.count == 1 && b4Is(superseded[0].date, 2026, 11, 5),
+          "cluster: a newer 'moved to Thursday' supersedes 'on Tuesday' (got \(superseded.count) cards)")
+    let reversedDays = cluster([quizMovedThursday, b4("Quiz 3 on Tuesday", b3At(2026, 11, 3), posted: b3At(2026, 11, 1))])
+    check(reversedDays.count == 2, "cluster: with the move posted first, the same pair stays two cards")
+    let pdfFirst = b4("Final Presentation", b3At(2026, 10, 27), via: .pdf, ref: "schedule.pdf")
+    let pdfSecond = b4("Final Presentation", b3At(2026, 11, 6), via: .pdf, ref: "schedule.pdf")
+    let pdfOut = cluster([pdfFirst, pdfSecond, b4("Final Presentation", b3At(2026, 11, 1), posted: b3At(2026, 10, 31))])
+    check(!pdfOut.contains { d in
+        (d.date == pdfFirst.date || d.alsoIn.contains { $0.date == pdfFirst.date })
+            && (d.date == pdfSecond.date || d.alsoIn.contains { $0.date == pdfSecond.date })
+    }, "cluster: two rows of one schedule PDF stay in different clusters")
+    let bridgeFirst = b4("Final Presentation", b3At(2026, 10, 27), via: .pdf, ref: "schedule.pdf")
+    let bridgeSecond = b4("Final Presentation", b3At(2026, 10, 29), via: .pdf, ref: "schedule.pdf")
+    let bridgeNews = b4("Final Presentation", b3At(2026, 10, 28), posted: b3At(2026, 10, 27))
+    check(cluster([bridgeFirst, bridgeSecond, bridgeNews]).count == 2,
+          "cluster: a news mention can't chain one PDF ref at two dates into one cluster")
+
     // MARK: - Done / dismiss / snooze (B5)
 
     func b5(_ title: String, _ date: Date, key: String) -> Deadline {
@@ -926,6 +982,22 @@ func runSelfCheck() -> Never {
     } catch { check(false, "marks: board-state.json write runs (\(error))") }
 
     // MARK: - Summarizer targets (P9)
+
+    let p9When = b3At(2026, 11, 1, 23, 59)
+    let p9Event = CourseEvent(title: "Final Paper due 1 Nov", date: p9When, source: .announcement,
+                              detail: "Final Paper due 1 Nov", origin: "Final Paper due 1 Nov", via: .news)
+    func p9Subject(_ status: AssignmentItem.Status) -> Subject {
+        Subject(id: "p9", name: "P9", code: "P9", hue: .green, assessments: [],
+                assignments: [AssignmentItem(title: "Final Paper", due: p9When, status: status)],
+                materials: [], announcements: [], events: [p9Event])
+    }
+    let p9Window = b3At(2026, 10, 1)...b3At(2026, 12, 1)
+    let p9OpenSubject = p9Subject(.open)
+    let p9DoneSubject = p9Subject(.submitted)
+    let p9OpenTargets = Summarizer.targets([p9OpenSubject], board: boardItems([p9OpenSubject]), titles: [:], window: p9Window)
+    let p9DoneTargets = Summarizer.targets([p9DoneSubject], board: boardItems([p9DoneSubject]), titles: [:], window: p9Window)
+    check(p9OpenTargets.isEmpty && p9DoneTargets.count == 1 && p9DoneTargets[0].event.title == p9Event.title,
+          "summarizer: a post behind an open Moodle assignment isn't summarized; once submitted it is (got \(p9OpenTargets.count) / \(p9DoneTargets.count))")
 
     let hiddenPost = CourseEvent(title: "Final Paper", date: b3At(2026, 11, 1, 23, 59), source: .announcement,
                                  detail: "Final Paper due 1 Nov", origin: "Final Paper due 1 Nov", via: .news)

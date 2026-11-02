@@ -141,6 +141,24 @@ enum Summarizer {
 
     /// The titles of items still in `subjects`. Run it on the published subjects (all sources), never on a partial set,
     /// or Outlook and mail titles (paid for) are dropped.
+    /// The events to title this run: dated, in `window`, not titled yet, and with a card someone can see (P9). A member of a
+    /// cluster a Moodle activity wins shows the Moodle title, and a marked cluster is hidden, so neither is sent. This is
+    /// worked out from the current clusters every run, never cached: once the assignment leaves the board or the cluster
+    /// splits, the post is titled on the next run. Prune still keeps titles of hidden members, so a re-split costs nothing.
+    static func targets(_ subjects: [Subject], board: [BoardItem], titles: [String: Summary],
+                        window: ClosedRange<Date>) -> [(course: String, event: CourseEvent)] {
+        var hidden = Set<String>()
+        for d in board {
+            if d.hidden { hidden.insert(d.id) }
+            if d.hidden || d.resolvedVia == .moodleActivity { hidden.formUnion(d.alsoIn.map(\.id)) }
+        }
+        var seen = Set<String>()
+        return subjects.flatMap { s in (s.events ?? []).map { (s, $0) } }
+            .filter { s, e in window.contains(e.date) && e.kind?.isDated != false && titles[id(e)] == nil
+                && !hidden.contains(Deadline.eventID(s, e)) && seen.insert(id(e)).inserted }
+            .map { (course: $0.0.name, event: $0.1) }
+    }
+
     static func prune(_ titles: [String: Summary], to subjects: [Subject]) -> [String: Summary] {
         let live = Set(subjects.flatMap { $0.events ?? [] }.map(id))
         return titles.filter { live.contains($0.key) }
