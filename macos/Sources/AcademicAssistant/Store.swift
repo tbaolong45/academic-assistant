@@ -1,7 +1,15 @@
 import Combine
 import Foundation
 
-/// The app's data. Sample courses until a source (Moodle, then Microsoft) is connected; connectors call `setLive`.
+/// Every source of one sync → the subjects the app shows (pure). Course pages first, then PDF dates, Outlook and mail
+/// on top, then Jev's labels and the AI titles.
+func normalize(moodle: [Subject], outlook: [OutlookCalendar.Item], mail: [SchoolMail.Message], docs: [String: [CourseEvent]],
+               known: [String: Jev.Answer], titles: [String: Summary]) -> [Subject] {
+    summarized(labeled(SchoolMail.merge(mail, into: OutlookCalendar.merge(outlook, into: withPDFDates(moodle, docs))), known), titles)
+}
+
+/// The app's data. Sample courses until Moodle is connected; then `publish()` builds `subjects` from the latest
+/// Moodle sync, PDF dates, Outlook events and school mail, once per sync.
 @MainActor final class Store: ObservableObject {
     enum Source: Equatable { case sample, live(synced: Date) }
 
@@ -19,6 +27,12 @@ import Foundation
     @Published private(set) var downloadNote: String? // e.g. "3 new files" / failures
     @Published private(set) var filesVersion = 0 // bumps after downloads so file rows re-check what's on disk
     private var autoSync: Task<Void, Never>?
+    private var syncTask: Task<Void, Never>? // a sync started with "Sync now"
+    /// Bumped at every sync start, connect and disconnect: a result from an older generation is dropped, so a sync
+    /// that finishes after Disconnect can't merge real mail into the sample data.
+    private var generation = 0
+    private var base: [Subject] = [] // the last Moodle sync (or its cache)
+    private var docs: [String: [CourseEvent]] = [:] // dates in downloaded PDFs, by subject id
     @Published private(set) var hasJevKey = Keychain.read(host: Jev.account) != nil
     @Published private(set) var classifierNote: String? // progress or the last classifier error (never the key)
     private var known = KindCache.load() // Jev answers by text hash
@@ -42,10 +56,12 @@ import Foundation
         guard MoodleAccount.credentials() != nil else { return }
         Notifier.requestPermission()
         isConnected = true
-        if let cache = MoodleCache.load() { apply(cache); subjects = SchoolMail.merge(mail.messages, into: subjects); addDocumentDates() }
+        if let cache = MoodleCache.load() { use(cache); publish() }
         board = boardItems(subjects) // didSet doesn't run for assignments made directly in init
-        startAutoSync()
+        startAutoSync(scanFirst: true)
     }
+
+    static func isCurrent(generation: Int, current: Int) -> Bool { generation == current }
 
     func subject(_ id: String) -> Subject? { subjects.first { $0.id == id } }
 
@@ -54,28 +70,25 @@ import Foundation
         do { try write(); cacheNote = nil } catch { cacheNote = "Local cache: \(error.localizedDescription)" }
     }
 
-    func setLive(_ subjects: [Subject], synced: Date = .now) {
-        self.subjects = subjects
-        source = .live(synced: synced)
+    private func use(_ s: MoodleSync) {
+        base = s.subjects
+        source = .live(synced: s.synced)
         syncError = nil
-    }
-
-    private func apply(_ s: MoodleSync) {
-        // Only PDF dates carry over: course-page dates come with the new sync itself (carrying them too doubled them).
-        let docs = Dictionary(subjects.map { ($0.id, ($0.events ?? []).filter(isPDFDate)) }, uniquingKeysWith: { a, _ in a })
-        setLive(labeled(s.subjects.map { n in
-            var n = n
-            n.events = ((n.events ?? []) + (docs[n.id] ?? [])).sorted { $0.date < $1.date }
-            return n
-        }, known), synced: s.synced)
-        subjects = summarized(subjects, titles)
         warnings = s.warnings
         siteName = s.siteName
     }
 
-    private func startAutoSync() {
+    /// The one place `subjects` is rebuilt while connected.
+    private func publish() {
+        guard isConnected, lastSynced != nil else { return } // sample data stays sample
+        subjects = normalize(moodle: base, outlook: calendarItems, mail: mail.messages, docs: docs, known: known, titles: titles)
+    }
+
+    private func startAutoSync(scanFirst: Bool = false) {
         autoSync?.cancel()
+        let gen = generation
         autoSync = Task { [weak self] in
+            if scanFirst { await self?.scanDocuments(gen) } // the cache's PDF dates, before the first sync bumps the generation
             while !Task.isCancelled {
                 await self?.sync()
                 try? await Task.sleep(for: .seconds(5 * 60)) // ponytail: 5-minute poll; Moodle has no push for students
@@ -83,25 +96,37 @@ import Foundation
         }
     }
 
-    func syncNow() { Task { await sync() } }
+    func syncNow() { syncTask = Task { await sync() } }
 
+    /// Moodle, Outlook and mail load side by side and are published once, when all are in. Downloads and the PDF scan
+    /// that follow publish once more.
     func sync() async {
         guard !syncing, let creds = MoodleAccount.credentials() else { return }
         syncing = true
         defer { syncing = false }
-        do {
-            let result = try await Moodle(site: creds.site, token: creds.token).sync()
-            guard isConnected else { return } // disconnected meanwhile
+        generation += 1
+        let gen = generation
+        async let outlook = fetchOutlook()
+        async let newMail = fetchMail()
+        let moodle: Result<MoodleSync, Error>
+        do { moodle = .success(try await Moodle(site: creds.site, token: creds.token).sync()) } catch { moodle = .failure(error) }
+        let (items, fetched) = await (outlook, newMail)
+        guard Self.isCurrent(generation: gen, current: generation) else { return } // disconnected meanwhile
+        if let items { calendarItems = items }
+        if let fetched { mail = fetched }
+        switch moodle {
+        case .success(let result):
             let previous = lastSynced == nil ? nil : subjects // no "news" on the very first sync
-            apply(result)
+            use(result)
             save { try MoodleCache.save(result) }
-            await addOutlookCalendar()
-            await addSchoolMail()
+            publish()
             if let previous, result.warnings.isEmpty, !lastSyncPartial { Notifier.post(Notifier.changes(old: previous, new: result.subjects)) }
             lastSyncPartial = !result.warnings.isEmpty
             await downloadMaterials(token: creds.token)
-        } catch {
-            if isConnected && !Task.isCancelled { syncError = error.localizedDescription }
+            await scanDocuments(gen)
+        case .failure(let error):
+            publish() // Outlook or mail may still be new
+            if !Task.isCancelled { syncError = error.localizedDescription }
         }
     }
 
@@ -112,20 +137,15 @@ import Foundation
         let r = await MaterialStore.downloadMissing(subjects, token: token)
         downloadNote = r.failed.isEmpty ? (r.fetched > 0 ? "\(r.fetched) new file\(r.fetched == 1 ? "" : "s") saved" : nil)
                                         : "\(r.fetched) saved, \(r.failed.count) failed"
-        addDocumentDates()
     }
 
-    /// Adds dates found in the downloaded syllabus/schedule PDFs to each subject's events (replacing older ones).
-    private func addDocumentDates() {
+    /// Dates found in the downloaded syllabus/schedule PDFs (replacing older ones), then Jev and DeepSeek on anything new.
+    private func scanDocuments(_ gen: Int) async {
         let current = subjects
-        Task {
-            let found = await Task.detached(priority: .utility) { MaterialStore.documentEvents(current) }.value
-            applyDocumentDates(found)
-        }
-    }
-
-    private func applyDocumentDates(_ found: [String: [CourseEvent]]) {
-        subjects = summarized(labeled(withPDFDates(subjects, found), known), titles)
+        let found = await Task.detached(priority: .utility) { MaterialStore.documentEvents(current) }.value
+        guard Self.isCurrent(generation: gen, current: generation) else { return }
+        docs = found
+        publish()
         classify() // last steps of every sync: everything new is on hand now
         summarize()
     }
@@ -146,7 +166,7 @@ import Foundation
                 catch { failure = error.localizedDescription; break }
             }
             save { try KindCache.save(known) }
-            subjects = summarized(labeled(subjects, known), titles)
+            publish()
             classifierNote = failure.map { "stopped after \(done): \($0)" } ?? "\(known.count) items classified"
             summarize() // board items are known now
         }
@@ -154,7 +174,7 @@ import Foundation
 
     /// Titles for dated items on the board from a week ago to 4 months ahead: Jev picks the parts, DeepSeek writes, Jev checks.
     private func summarize() {
-        guard !summarizing, !classifying, let jev = Keychain.read(host: Jev.account), let ds = Keychain.read(host: DeepSeek.account) else { return }
+        guard isConnected, !summarizing, !classifying, let jev = Keychain.read(host: Jev.account), let ds = Keychain.read(host: DeepSeek.account) else { return }
         let window = Date.now.addingTimeInterval(-7 * 86_400)...Date.now.addingTimeInterval(120 * 86_400)
         var seen = Set<String>()
         let todo = subjects.flatMap { s in (s.events ?? []).map { (course: s.name, event: $0) } }
@@ -175,29 +195,31 @@ import Foundation
                     if done % 10 == 0 { save { try SummaryCache.save(titles) } }
                 } catch { failure = error.localizedDescription; break }
             }
-            let live = Set(subjects.flatMap { $0.events ?? [] }.map(Summarizer.id))
-            titles = titles.filter { live.contains($0.key) } // drop titles of items that no longer exist
+            titles = Summarizer.prune(titles, to: subjects) // `subjects` is always a full publish, never a partial one
             save { try SummaryCache.save(titles) }
-            subjects = summarized(subjects, titles)
+            publish()
             summaryNote = failure.map { "stopped after \(done): \($0)" }
                 ?? "\(titles.count) titles · \(rejected) of the new ones failed Jev's check and kept their plain headline"
         }
     }
 
-    /// One-off Outlook Calendar events (talks, keynotes, changes) from the published ICS link, labelled from the caches.
-    private func addOutlookCalendar() async {
-        guard let link = Keychain.read(host: OutlookCalendar.account) else { return }
+    /// The Outlook calendar from its published ICS link; nil when no link is set or the fetch failed (the last items stay).
+    private func fetchOutlook() async -> [OutlookCalendar.Item]? {
+        guard let link = Keychain.read(host: OutlookCalendar.account) else { return nil }
         do {
-            calendarItems = try await OutlookCalendar.fetch(link)
-            subjects = summarized(labeled(OutlookCalendar.merge(calendarItems, into: subjects), known), titles)
+            let items = try await OutlookCalendar.fetch(link)
             outlookNote = nil
+            return items
+        } catch {
+            outlookNote = "Outlook calendar: \(error.localizedDescription)" // never the link itself
+            return nil
         }
-        catch { outlookNote = "Outlook calendar: \(error.localizedDescription)" } // never the link itself
     }
 
     /// School mail forwarded to Gmail: new messages from the last 60 days are downloaded once (by UID) and notified.
-    private func addSchoolMail() async {
-        guard let saved = Keychain.read(host: SchoolMail.account)?.split(separator: "\n", maxSplits: 1), saved.count == 2 else { return }
+    /// nil when no Gmail login is set or the session failed (the last mail stays).
+    private func fetchMail() async -> MailStore? {
+        guard let saved = Keychain.read(host: SchoolMail.account)?.split(separator: "\n", maxSplits: 1), saved.count == 2 else { return nil }
         let (address, password) = (String(saved[0]), String(saved[1]))
         let since = Date.now.addingTimeInterval(-60 * 86_400)
         do {
@@ -215,11 +237,13 @@ import Foundation
             let known = Set(start.messages.map(\.uid))
             let fresh = updated.messages.filter { !known.contains($0.uid) }
             if !start.messages.isEmpty { Notifier.post(fresh.map { (title: "✉︎ \($0.from)", body: $0.subject) }) } // not on the first download
-            mail = updated
-            save { try MailCache.save(mail) }
-            mailNote = mail.note
-        } catch { mailNote = error.localizedDescription } // never the password
-        subjects = summarized(labeled(SchoolMail.merge(mail.messages, into: subjects), known), titles)
+            save { try MailCache.save(updated) }
+            mailNote = updated.note
+            return updated
+        } catch {
+            mailNote = error.localizedDescription // never the password
+            return nil
+        }
     }
 
     /// Checks the Gmail login (sign in + open All Mail) before keeping it.
@@ -228,7 +252,8 @@ import Foundation
         try await SchoolMail.session(address: address, password: password) { _ in }
         guard Keychain.save("\(address)\n\(password)", host: SchoolMail.account) else { throw MoodleError.keychain }
         hasMail = true
-        await addSchoolMail()
+        if let fetched = await fetchMail() { mail = fetched }
+        publish()
         classify()
     }
 
@@ -237,16 +262,18 @@ import Foundation
         hasMail = false
         mail = MailStore()
         save { try MailCache.save(MailStore()) }
-        subjects = SchoolMail.merge([], into: subjects)
+        publish()
     }
 
     /// Checks the link returns a calendar before keeping it.
     func setOutlookLink(_ raw: String) async throws {
         let link = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        _ = try await OutlookCalendar.fetch(link)
+        let items = try await OutlookCalendar.fetch(link)
         guard Keychain.save(link, host: OutlookCalendar.account) else { throw MoodleError.keychain }
         hasOutlookLink = true
-        await addOutlookCalendar()
+        calendarItems = items
+        outlookNote = nil
+        publish()
         classify()
     }
 
@@ -254,7 +281,7 @@ import Foundation
         Keychain.delete(host: OutlookCalendar.account)
         hasOutlookLink = false
         calendarItems = []
-        subjects = OutlookCalendar.merge([], into: subjects)
+        publish()
     }
 
     /// Checks the DeepSeek key with one real call before keeping it.
@@ -308,14 +335,20 @@ import Foundation
         siteName = info.sitename ?? host
         syncError = nil
         isConnected = true
+        generation += 1
         Notifier.requestPermission()
         startAutoSync()
     }
 
     /// Deletes the key and cache and goes back to sample data.
     func disconnect() {
+        generation += 1 // a sync or PDF scan still running is dropped when it returns
         autoSync?.cancel()
         autoSync = nil
+        syncTask?.cancel()
+        syncTask = nil
+        base = []
+        docs = [:]
         if let s = MoodleAccount.site, let host = try? Moodle.siteURL(s).host() { Keychain.delete(host: host) }
         MoodleCache.delete()
         isConnected = false

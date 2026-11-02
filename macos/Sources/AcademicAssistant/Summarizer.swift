@@ -139,6 +139,13 @@ enum Summarizer {
                        faithful: 1 - (a["invents"] ?? 1), specific: a["specific"] ?? 0)
     }
 
+    /// The titles of items still in `subjects`. Run it on the published subjects (all sources), never on a partial set,
+    /// or Outlook and mail titles (paid for) are dropped.
+    static func prune(_ titles: [String: Summary], to subjects: [Subject]) -> [String: Summary] {
+        let live = Set(subjects.flatMap { $0.events ?? [] }.map(id))
+        return titles.filter { live.contains($0.key) }
+    }
+
     /// Cache key: same source, same sentence and same date → same title.
     static func id(_ e: CourseEvent) -> String { Jev.id("\(e.origin ?? "")|\(e.detail ?? e.title)|\(e.date.timeIntervalSince1970)") }
 }

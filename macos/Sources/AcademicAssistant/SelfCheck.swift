@@ -579,6 +579,37 @@ func runSelfCheck() -> Never {
     check(unreadableNote.note == "49 school emails · 1 skipped (unreadable date)" && cleanNote.note == "49 school emails",
           "mail: the note counts skipped-unreadable mail, and has no '·' part when nothing was skipped (got \(unreadableNote.note))")
 
+    // MARK: - One publish per sync (P2)
+
+    let p2ICS = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART;TZID=Arabian Standard Time:20261110T090000\nSUMMARY:Keynote: Bruce Holsinger\nDESCRIPTION:Songs of the Machine\nEND:VEVENT\nEND:VCALENDAR"
+    let p2Outlook = OutlookCalendar.parse(p2ICS)
+    let p2Mail = [SchoolMail.Message(uid: 42, subject: "Quiz moved", from: "Undergraduate Office", date: .now,
+                                     body: "The quiz is on 5th November at 10am.")]
+    let p2Docs = [Subject.all[0].id: [CourseEvent(title: "Final", date: Date.now.addingTimeInterval(30 * 86_400),
+                                                  source: .document, detail: "Final exam 15 December")]]
+    let p2Normalized = normalize(moodle: Subject.all, outlook: p2Outlook, mail: p2Mail, docs: p2Docs, known: [:], titles: [:])
+    let p2Chain = summarized(labeled(SchoolMail.merge(p2Mail, into: OutlookCalendar.merge(p2Outlook,
+        into: withPDFDates(Subject.all, p2Docs))), [:]), [:])
+    func eventKeys(_ subjects: [Subject]) -> [String] {
+        subjects.flatMap { s in (s.events ?? []).map { "\(s.id)|\($0.source.rawValue)|\($0.title)|\(Int($0.date.timeIntervalSince1970))" } }.sorted()
+    }
+    let p2Events = p2Normalized.flatMap { s in (s.events ?? []).map { (s.id, $0) } }
+    check(eventKeys(p2Normalized) == eventKeys(p2Chain)
+          && p2Events.contains { $0.1.source == .outlook } && p2Events.contains { $0.1.announcement != nil },
+          "sync: normalize equals the old chain by event ids, with the Outlook event and the dated mail in place")
+    let p2Title = Summary(title: "Keynote", parts: [], mentionsDate: 0.9, keepsPoint: 0.9, faithful: 0.9, specific: 0.9)
+    if let p2OutlookEvent = p2Events.first(where: { $0.1.source == .outlook })?.1,
+       let p2MailEvent = p2Events.first(where: { $0.1.announcement != nil })?.1 {
+        let p2Titles = [Summarizer.id(p2OutlookEvent): p2Title, Summarizer.id(p2MailEvent): p2Title, "stale": p2Title]
+        let p2Pruned = Summarizer.prune(p2Titles, to: p2Normalized)
+        check(Set(p2Pruned.keys) == [Summarizer.id(p2OutlookEvent), Summarizer.id(p2MailEvent)],
+              "sync: the title prune keeps the Outlook and mail titles normalize produces, and drops a stale one")
+    } else {
+        check(false, "sync: normalize produced an Outlook event and a dated mail to prune")
+    }
+    let gate = MainActor.assumeIsolated { (Store.isCurrent(generation: 3, current: 3), Store.isCurrent(generation: 3, current: 4)) }
+    check(gate.0 && !gate.1, "sync: a result from generation 3 applies only while 3 is still current")
+
     // MARK: - Security (T1)
 
     // S2: personal details never leave the Mac in a Jev / DeepSeek request.
