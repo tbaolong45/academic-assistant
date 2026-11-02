@@ -1207,6 +1207,10 @@ func runSelfCheck() -> Never {
                                          source: .announcement, via: .news)
     check(roomMove.count == 1 && b4Is(roomMove[0].date, 2026, 10, 20) && roomMove[0].moved == nil,
           "cluster: 'moved to room 3' keeps its only date and sets no move (second net)")
+    let todayRoom3 = Moodle.mentionedDates("today's quiz is moved to room 3", posted: b3At(2026, 11, 2),
+                                           source: .announcement, via: .news)
+    check(todayRoom3.count == 1 && b4Is(todayRoom3[0].date, 2026, 11, 2) && todayRoom3[0].moved == nil,
+          "cluster: 'today's quiz is moved to room 3' keeps today and sets no move (got \(todayRoom3.count) dates)")
     let movedToToday = Moodle.mentionedDates("We will move tomorrow's office hours to today at 3 pm",
                                              posted: b3At(2026, 10, 26), source: .announcement, via: .news)
     check(movedToToday.count == 1 && movedToToday[0].moved == true

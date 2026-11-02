@@ -27,18 +27,6 @@ enum Palette {
     static let critical = Token(light: "d03b3b", dark: "fe726e")
 }
 
-/// Old names kept for one step so every view compiles on the new palette; U6 renames the uses and deletes this.
-enum Tech {
-    static var bg: Color { Palette.bg.color }
-    static var panel: Color { Palette.surface.color }
-    static var panelHi: Color { Palette.raised.color }
-    static var line: Color { Palette.line.color }
-    static var text: Color { Palette.text.color }
-    static var text2: Color { Palette.text2.color }
-    static var text3: Color { Palette.text3.color }
-    static var neon: Color { Palette.accentInk.color } // mostly text and icons, which need accentInk's 4.5:1
-}
-
 extension Color {
     init(hex: String) {
         let v = UInt32(hex, radix: 16) ?? 0

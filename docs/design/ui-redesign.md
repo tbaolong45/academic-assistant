@@ -439,6 +439,11 @@ Wherever a check needs network or a mail server, the step stays pure and the liv
   - (a) Pure `Tier.next(now:lastSlow:manual:cameForward:)`:
     - `.slow` when 60 min or more have passed since `lastSlow`, or when manual or cameForward is true.
     - `.fast` at 59 min with neither flag.
+  - **As built (P6, approved by the architect 2026-11-03):**
+    - Bringing the window forward starts a slow sync only if no slow sync finished in the last 5 minutes. That saves about 90 calls per app switch. ⌘R (manual) always forces a slow sync.
+    - A fast sync's merge also carries course-page dates and non-news forum posts from the previous result, so the board keeps them.
+    - A deleted non-news post can linger until the next slow sync (≤ 60 min). This is accepted.
+    - Fast syncs never prune marks.
   - (b) Pure `needsStatus(dueDate:cutoff:graded:now:)`. The status call also carries the student's extension (T4), so it must keep running while late work is still accepted:
     - ungraded, due tomorrow → true
     - ungraded, due 13 days ago → true

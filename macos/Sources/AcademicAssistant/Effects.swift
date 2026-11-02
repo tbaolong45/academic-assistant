@@ -8,15 +8,8 @@ extension View {
     /// A soft shadow only in light mode; dark mode separates cards by fill.
     func card(active: Bool = false, radius: CGFloat = 12) -> some View { modifier(Card(active: active, radius: radius)) }
 
-    /// Old name, kept until U4/U5 restyle its callers. Glows are gone, so `glow` is ignored.
-    func techPanel(active: Bool = false, glow: Color = .clear, radius: CGFloat = 10) -> some View { card(active: active, radius: radius) }
-
     /// Entrance animation: fades and rises into place, delayed by `index` for a cascade. Nothing under Reduce Motion.
     func stagger(_ index: Int) -> some View { modifier(Stagger(index: index)) }
-
-    /// The pulse ring is gone (it looped forever). Kept as a no-op until U4/U5 restyle its callers; urgency gets an
-    /// icon and a label there instead.
-    func pulse(_ active: Bool = true, color: Color = .clear) -> some View { self }
 }
 
 private struct Card: ViewModifier {
@@ -61,20 +54,4 @@ struct SectionLabel: View {
 
 extension SectionLabel {
     init(_ text: String) { self.init(text: text) }
-}
-
-/// Plain window background. Kept until U3 removes its caller in App.swift.
-struct TechBackground: View {
-    var body: some View { Palette.bg.color.ignoresSafeArea().accessibilityHidden(true) }
-}
-
-/// Plain page title (no typing effect, no blinking cursor). Kept until U4/U5 give each page its own header.
-struct TypewriterTitle: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(.title.weight(.bold))
-            .foregroundStyle(Palette.text.color)
-            .accessibilityAddTraits(.isHeader)
-    }
 }

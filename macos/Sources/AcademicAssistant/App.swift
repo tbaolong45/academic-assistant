@@ -127,7 +127,7 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
         } detail: {
             ZStack {
-                TechBackground()
+                Palette.bg.color.ignoresSafeArea().accessibilityHidden(true) // the window's canvas
                 Group {
                     switch nav.selection {
                     case .course(let id): if let s = store.subject(id) { CourseView(subject: s) }
